@@ -1,0 +1,74 @@
+# Метаданные проекта, точка входа CLI и настройки инструментов.
+#
+# Установка в режиме разработки (один раз):
+#   pip install -e .
+# После этого доступна команда `hhcleaner` без python hh_cleaner.py.
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hhcleaner"
+version = "1.1.0"
+requires-python = ">=3.9"
+# Единственный источник истины по зависимостям. requirements.txt ставит этот же набор
+# через `pip install -e .`.
+# Верхние границы — на следующий мажор: защита от breaking-релизов зависимостей.
+dependencies = [
+    "requests>=2.28,<3",
+    "playwright>=1.50,<2",
+    "python-dotenv>=1.0,<2",
+    "rich>=13.9,<16",
+    # tomllib встроен в Python 3.11+; для 3.9/3.10 нужен внешний пакет.
+    "tomli>=2.0,<3; python_version < '3.11'",
+    # Shell tab-completion для argparse: активируется один раз через
+    # `activate-global-python-argcomplete` или eval "$(register-python-argcomplete hhcleaner)".
+    "argcomplete>=3.0,<4",
+]
+
+# Инструменты разработки. Установка: pip install -e ".[dev]"
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pylint>=3.0",
+]
+
+[project.scripts]
+hhcleaner = "hh_cleaner:main"
+
+[tool.setuptools]
+# Плоская структура: все модули лежат в корне, не в пакете.
+py-modules = [
+    "hh_cleaner", "auth", "config", "app_config",
+    "chats_api", "chats_browser", "negotiations", "notify",
+    "scheduler", "cli_cmds",
+]
+
+# ---------------------------------------------------------------------------
+# Pylint и расширение Pylint для VS Code читают секции [tool.pylint.*] отсюда.
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.messages_control]
+# Отключённые проверки и причина:
+#   broad-exception-caught — широкий `except Exception` здесь намеренный:
+#       сеть и браузер падают непредсказуемо, а скрипт должен продолжать работу
+#       (это блоки retry и best-effort, ошибка логируется и идём дальше).
+#   too-many-branches / too-many-statements / too-many-locals /
+#   too-many-return-statements — это метрики «сложности» для линейного
+#       скрипта-автоматизации; дробить рабочие функции ради цифры нет смысла
+#       (_run — диспетчер режимов с ранними выходами на каждый режим).
+disable = [
+    "broad-exception-caught",
+    "too-many-branches",
+    "too-many-statements",
+    "too-many-locals",
+    "too-many-return-statements",
+]

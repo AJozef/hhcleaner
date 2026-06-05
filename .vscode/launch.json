@@ -1,0 +1,63 @@
+{
+    // Конфигурации запуска. Выбираются в панели Run and Debug (Ctrl+Shift+D)
+    // из выпадающего списка вверху. console=integratedTerminal обязателен —
+    // иначе не сработает input() при логине и подтверждениях.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "hh_cleaner: вход (сохранить сессию)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/hh_cleaner.py",
+            "args": ["--login-only"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "hh_cleaner: все шаги",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/hh_cleaner.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "hh_cleaner: прочитать все чаты",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/hh_cleaner.py",
+            "args": ["read-all"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "hh_cleaner: только отклики",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/hh_cleaner.py",
+            "args": ["negotiations"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "hh_cleaner: только чаты-отказы",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/hh_cleaner.py",
+            "args": ["chats-rejected"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "hh_cleaner: только архивные вакансии",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/hh_cleaner.py",
+            "args": ["archived-vacancy"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "hh_cleaner: только старые чаты",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/hh_cleaner.py",
+            "args": ["old-chats"],
+            "console": "integratedTerminal"
+        }
+    ]
+}

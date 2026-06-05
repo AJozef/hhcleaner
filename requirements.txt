@@ -1,0 +1,9 @@
+# Зависимости описаны в pyproject.toml — это единственный источник истины.
+# Воссоздать окружение:
+#   python -m venv .venv
+#   .venv\Scripts\activate
+#   pip install -r requirements.txt
+#   playwright install chromium     # один раз — скачать браузер для Playwright
+#
+# Для разработки (тесты + линтер): pip install -e ".[dev]"
+-e .

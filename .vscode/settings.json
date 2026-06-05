@@ -1,0 +1,9 @@
+{
+    // Использовать интерпретатор из .venv — тогда Pylance и линтеры видят
+    // установленные requests/playwright и не подчёркивают импорты.
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+    // Дефолтный режим Pylance. В "strict" он сыпет шумом про отсутствие
+    // аннотаций и нетипизированный API Playwright — для скрипта это не нужно.
+    "python.analysis.typeCheckingMode": "standard"
+}
