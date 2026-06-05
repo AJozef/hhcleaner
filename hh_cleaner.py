@@ -548,14 +548,33 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         return EXIT_OK
 
     # ── Основной прогон ───────────────────────────────────────────────────────
+    # Если сессии вовсе нет и --no-input — выходим до открытия окна:
+    # _prepare_context в этом случае позвал бы interactive_login.
+    if args.no_input and not args.relogin and not auth.session_exists():
+        log_err("Сохранённой сессии нет, а --no-input запрещает открывать окно входа.")
+        log_err("Выполните вход вручную: hhcleaner --login-only")
+        notify.session_expired()
+        return EXIT_NEED_LOGIN
+
     context = _prepare_context(p, args.relogin, args.headed)
     session = open_session(context)
     status = check_session(session)
     log(f"Проверка: {status.message}")
 
+    if not status.ok and auth.has_login_credentials():
+        log_warn("Сессия не работает — пробую тихий перелогин из HH_EMAIL/HH_PASSWORD.")
+        if auth.headless_login(context):
+            session = open_session(context)
+            status = check_session(session)
+            log(f"После тихого перелогина: {status.message}")
+        else:
+            log_warn("Тихий перелогин не удался (возможно, капча или 2FA).")
+
     if not status.ok:
         if args.no_input:
             log_err("Сессия не работает, а --no-input запрещает открывать окно входа.")
+            if auth.has_login_credentials():
+                log_err("Тихий перелогин споткнулся — вероятно, появилась капча или 2FA.")
             log_err("Выполните вход вручную: hhcleaner --login-only")
             notify.session_expired()
             context.close()

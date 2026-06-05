@@ -24,6 +24,7 @@ from config import (
 )
 
 _LOGIN_TIMEOUT_MS = 5 * 60 * 1000  # 5 минут на ручной вход
+_HEADLESS_LOGIN_TIMEOUT_MS = 15 * 1000  # 15 секунд на тихий перелогин
 
 
 class LoginError(Exception):
@@ -104,6 +105,50 @@ def _autofill_login(page, email: str, password: str) -> None:
                 btn.click()
     except Exception:  # pylint: disable=broad-exception-caught
         pass
+
+
+def has_login_credentials() -> bool:
+    """True, если HH_EMAIL и HH_PASSWORD заданы в env (оба непустые после strip)."""
+    return bool(
+        os.environ.get("HH_EMAIL", "").strip()
+        and os.environ.get("HH_PASSWORD", "").strip()
+    )
+
+
+def headless_login(context: BrowserContext) -> bool:
+    """Тихий вход через HH_EMAIL/HH_PASSWORD — без участия человека.
+
+    Используется в --no-input при протухшей сессии: пытаемся за ~15 секунд
+    автоматически залогиниться через автозаполнение формы. Капча и 2FA
+    автоматически не проходятся — тогда возвращаем False, и вызывающий код
+    решает что делать (notify + exit 3).
+    """
+    if not has_login_credentials():
+        return False
+
+    email    = os.environ.get("HH_EMAIL", "").strip()
+    password = os.environ.get("HH_PASSWORD", "").strip()
+
+    page = context.pages[0] if context.pages else context.new_page()
+    try:
+        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=15000)
+    except (PlaywrightError, PlaywrightTimeout):
+        return False
+
+    try:
+        card = page.query_selector("[data-qa*='account-type-card-APPLICANT']")
+        if card:
+            card.click()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass  # карточку выбора роли могут не показать — не критично
+
+    _autofill_login(page, email, password)
+
+    try:
+        page.wait_for_url(_login_succeeded, timeout=_HEADLESS_LOGIN_TIMEOUT_MS)
+        return True
+    except (PlaywrightError, PlaywrightTimeout):
+        return False
 
 
 def interactive_login(context: BrowserContext) -> BrowserContext:
