@@ -557,14 +557,14 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         return EXIT_NEED_LOGIN
 
     context = _prepare_context(p, args.relogin, args.headed)
-    session = open_session(context)
+    session = open_session(context, workers=args.workers)
     status = check_session(session)
     log(f"Проверка: {status.message}")
 
     if not status.ok and auth.has_login_credentials():
         log_warn("Сессия не работает — пробую тихий перелогин из HH_EMAIL/HH_PASSWORD.")
         if auth.headless_login(context):
-            session = open_session(context)
+            session = open_session(context, workers=args.workers)
             status = check_session(session)
             log(f"После тихого перелогина: {status.message}")
         else:
@@ -582,7 +582,7 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         log_warn("Сессия не работает — открываю окно входа.")
         context.close()
         context = auth.interactive_login(auth.launch_context(p, headless=False))
-        session = open_session(context)
+        session = open_session(context, workers=args.workers)
         status = check_session(session)
         log(f"Проверка: {status.message}")
         if not status.ok:

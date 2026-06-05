@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, NamedTuple
 
 import requests
+from requests.adapters import HTTPAdapter
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.progress import track as _track
 
@@ -37,8 +38,31 @@ class ChatAPIError(Exception):
 # ──────────────────────────── session ────────────────────────────────────────
 
 
-def open_session(context) -> requests.Session | None:
+_DEFAULT_POOL_MAXSIZE = 10  # дефолт urllib3 — расширяем при workers > 10
+
+
+def _configure_pool(session: requests.Session, workers: int) -> None:
+    """Расширяет HTTPS-пул соединений до числа воркеров.
+
+    Дефолтный pool_maxsize у urllib3 — 10. Если workers больше, лишние
+    потоки либо ждут свободного слота, либо переоткрывают сокеты с
+    варнингом «Connection pool is full, discarding connection» — параллелизм
+    оборачивается лишней работой. При workers <= 10 ничего не трогаем.
+    """
+    if workers <= _DEFAULT_POOL_MAXSIZE:
+        return
+    adapter = HTTPAdapter(
+        pool_connections=_DEFAULT_POOL_MAXSIZE, pool_maxsize=workers
+    )
+    session.mount("https://", adapter)
+
+
+def open_session(context, workers: int = 1) -> requests.Session | None:
     """Открывает chatik, забирает куки и создаёт requests-сессию (или None).
+
+    workers — число параллельных потоков, которые будут пользоваться сессией
+    (1 = последовательно). Нужно знать заранее, чтобы корректно размерить
+    connection pool urllib3.
 
     Страницу НЕ закрываем намеренно: в persistent context закрытие последней
     страницы автоматически закрывает весь контекст, и последующие new_page()
@@ -66,6 +90,7 @@ def open_session(context) -> requests.Session | None:
         return None
 
     session = requests.Session()
+    _configure_pool(session, workers)
     for k, v in {
         "User-Agent":        USER_AGENT,
         "Accept":            "application/json",
