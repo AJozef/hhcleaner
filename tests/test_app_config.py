@@ -37,10 +37,10 @@ class TestSetKeyValidation:
 class TestRoundTrip:
     def test_set_load_persists(self, isolated_home):
         app_config.set_key("days", "30")
-        app_config.set_key("profile", "work")
+        app_config.set_key("log", "C:/logs/x.log")
         cfg = app_config.load()
         assert cfg["days"] == 30
-        assert cfg["profile"] == "work"
+        assert cfg["log"] == "C:/logs/x.log"
 
     def test_unset_removes_key(self, isolated_home):
         app_config.set_key("days", "30")

@@ -22,13 +22,12 @@ SCHEDULE_TIME = "09:00"
 # ──────────────────────────── command builder ─────────────────────────────────
 
 
-def _scheduled_run_command(profile: str = "default") -> str:
+def _scheduled_run_command() -> str:
     """Строит команду для планировщика.
 
     Предпочитает установленный exe-файл; если не найден — python hh_cleaner.py.
     """
-    profile_arg = f' --profile "{profile}"' if profile != "default" else ""
-    run_args = f'--quiet --no-input --log "{DEFAULT_LOG_FILE}"{profile_arg}'
+    run_args = f'--quiet --no-input --log "{DEFAULT_LOG_FILE}"'
 
     scripts_dir = os.path.dirname(sys.executable)
     exe_path = os.path.join(scripts_dir, "hhcleaner.exe")
@@ -60,13 +59,12 @@ def _ensure_windows() -> bool:
 def install_schedule(
     day: str = SCHEDULE_DAY,
     time_str: str = SCHEDULE_TIME,
-    profile: str = "default",
 ) -> int:
     """Регистрирует задачу в Windows Task Scheduler."""
     if not _ensure_windows():
         return 1
 
-    run_cmd = _scheduled_run_command(profile)
+    run_cmd = _scheduled_run_command()
     cmd = [
         "schtasks", "/create", "/tn", TASK_NAME,
         "/tr", run_cmd,

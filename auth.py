@@ -8,45 +8,22 @@
 Если в .env заданы HH_EMAIL и HH_PASSWORD — форма заполняется автоматически;
 капчу и 2FA всё равно нужно пройти вручную.
 
-Профили позволяют вести несколько аккаунтов hh.ru. Аргумент profile передаётся
-во все публичные функции; «default» — обратно совместимое поведение.
 ВНИМАНИЕ: папка профиля фактически даёт доступ к аккаунту — не делитесь ей.
 """
 from __future__ import annotations
 
 import os
-import shutil
 
 from playwright.sync_api import BrowserContext
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from config import (
-    LOGIN_URL, ensure_app_dir, get_user_data_dir,
+    LOGIN_URL, USER_DATA_DIR, ensure_app_dir,
     log, log_ok, log_section, log_warn,
 )
 
-# Старое расположение профиля (рядом со скриптом) — переносим один раз.
-_LEGACY_USER_DATA_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), ".userdata"
-)
-
 _LOGIN_TIMEOUT_MS = 5 * 60 * 1000  # 5 минут на ручной вход
-
-
-def _migrate_legacy_session(user_data_dir: str) -> None:
-    """Переносит профиль из старого <проект>/.userdata в APP_DIR/userdata.
-
-    Срабатывает только для профиля «default» (если старая папка есть, а новой
-    ещё нет). После переноса условие больше не выполняется.
-    """
-    if os.path.isdir(_LEGACY_USER_DATA_DIR) and not os.path.isdir(user_data_dir):
-        ensure_app_dir()
-        try:
-            shutil.move(_LEGACY_USER_DATA_DIR, user_data_dir)
-            log(f"Профиль сессии перенесён в {user_data_dir}")
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass  # best-effort; не вышло — просто попросим войти заново
 
 
 class LoginError(Exception):
@@ -58,36 +35,30 @@ def _login_succeeded(url: str) -> bool:
     return "hh.ru/" in url and "/account/" not in url
 
 
-def session_exists(profile: str = "default") -> bool:
+def session_exists() -> bool:
     """True, если профиль браузера существует и непустой."""
-    udd = get_user_data_dir(profile)
-    if profile == "default":
-        _migrate_legacy_session(udd)
-    return os.path.isdir(udd) and bool(os.listdir(udd))
+    return os.path.isdir(USER_DATA_DIR) and bool(os.listdir(USER_DATA_DIR))
 
 
-def clear_session(profile: str = "default") -> None:
+def clear_session() -> None:
     """Удаляет профиль браузера (для перелогина / смены аккаунта).
 
     Вызывать только когда контекст закрыт — иначе файлы профиля заняты.
     """
-    udd = get_user_data_dir(profile)
-    if os.path.isdir(udd):
-        shutil.rmtree(udd, ignore_errors=True)
+    import shutil  # pylint: disable=import-outside-toplevel
+    if os.path.isdir(USER_DATA_DIR):
+        shutil.rmtree(USER_DATA_DIR, ignore_errors=True)
 
 
-def launch_context(playwright, headless: bool, profile: str = "default") -> BrowserContext:
-    """Открывает постоянный контекст браузера из профиля нужного аккаунта.
+def launch_context(playwright, headless: bool) -> BrowserContext:
+    """Открывает постоянный контекст браузера из сохранённого профиля.
 
     Возвращает BrowserContext (у persistent-контекста нет отдельного Browser —
     закрывать нужно сам контекст: context.close()).
     """
-    udd = get_user_data_dir(profile)
-    if profile == "default":
-        _migrate_legacy_session(udd)
     ensure_app_dir()
-    os.makedirs(udd, exist_ok=True)
-    return playwright.chromium.launch_persistent_context(udd, headless=headless)
+    os.makedirs(USER_DATA_DIR, exist_ok=True)
+    return playwright.chromium.launch_persistent_context(USER_DATA_DIR, headless=headless)
 
 
 def _autofill_login(page, email: str, password: str) -> None:

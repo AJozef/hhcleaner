@@ -22,7 +22,6 @@ hh_cleaner.py — точка входа.
     hhcleaner --check --output json              # проверка сессии в JSON
     hhcleaner --quiet --no-input --log           # безлюдный прогон с записью в лог
     hhcleaner --relogin                          # сменить аккаунт (новый вход) + шаги
-    hhcleaner --profile work                     # использовать профиль «work»
     hhcleaner --max-delete 20                    # удалить не более 20 элементов за шаг
     hhcleaner --workers 5                        # параллельное удаление (5 потоков)
     hhcleaner --install-schedule                 # зарегистрировать еженедельный запуск
@@ -82,8 +81,6 @@ from cli_cmds import (
     chromium_executable_exists,
     cmd_config,
     clear_log,
-    delete_profile,
-    list_profiles,
     load_snapshot,
     save_snapshot,
     self_check,
@@ -94,7 +91,6 @@ from config import (
     OLD_CHATS_DAYS,
     console,
     file_console,
-    get_default_profile,
     log,
     log_err,
     log_ok,
@@ -184,14 +180,6 @@ def parse_args() -> argparse.Namespace:
         "--check", action="store_true",
         help="Только проверить сессию и выйти (код 0 — рабочая, 3 — нужен вход).",
     )
-    grp_auth.add_argument(
-        "--profile", default=None, metavar="NAME",
-        help=(
-            "Профиль (имя папки данных). Несколько аккаунтов hh.ru. "
-            "По умолчанию: из config.toml / HH_PROFILE / «default»."
-        ),
-    )
-
     # ── Параметры очистки ────────────────────────────────────────────────────
     grp_clean = parser.add_argument_group("очистка")
     grp_clean.add_argument(
@@ -230,14 +218,6 @@ def parse_args() -> argparse.Namespace:
     grp_info.add_argument(
         "--self-check", action="store_true",
         help="Диагностика окружения: браузер, сессия, конфиг, зависимости.",
-    )
-    grp_info.add_argument(
-        "--list-profiles", action="store_true",
-        help="Вывести список всех сохранённых профилей.",
-    )
-    grp_info.add_argument(
-        "--delete-profile", metavar="NAME",
-        help="Удалить профиль (сессию и данные браузера).",
     )
     grp_info.add_argument(
         "--show-log", nargs="?", const=50, type=int, metavar="N",
@@ -302,8 +282,6 @@ def parse_args() -> argparse.Namespace:
 
     # Применяем дефолты из config.toml ПЕРЕД парсингом, чтобы --help показывал их.
     cfg_defaults = app_config.as_argparse_defaults()
-    # profile обрабатываем отдельно — у нас None-default (не "default") для детекта.
-    cfg_profile = cfg_defaults.pop("profile", None)
     if cfg_defaults:
         parser.set_defaults(**cfg_defaults)
 
@@ -319,10 +297,6 @@ def parse_args() -> argparse.Namespace:
         _argcomplete_mod.autocomplete(parser)
 
     args = parser.parse_args()
-
-    # Разрешаем профиль: CLI > config.toml > HH_PROFILE > "default".
-    if args.profile is None:
-        args.profile = cfg_profile or get_default_profile()
 
     return args
 
@@ -399,17 +373,17 @@ def run_steps(  # pylint: disable=too-many-arguments,too-many-positional-argumen
 # ──────────────────────────── context / auth ─────────────────────────────────
 
 
-def _prepare_context(p, relogin: bool, headed: bool, profile: str = "default"):
+def _prepare_context(p, relogin: bool, headed: bool):
     """Готовит авторизованный постоянный контекст."""
     if relogin:
         log("Перелогин: вход в новый аккаунт.")
-        auth.clear_session(profile)
-        return auth.interactive_login(auth.launch_context(p, headless=False, profile=profile))
-    if auth.session_exists(profile):
+        auth.clear_session()
+        return auth.interactive_login(auth.launch_context(p, headless=False))
+    if auth.session_exists():
         log("Использую сохранённую сессию.")
-        return auth.launch_context(p, headless=not headed, profile=profile)
+        return auth.launch_context(p, headless=not headed)
     log("Сохранённой сессии нет — нужно войти один раз.")
-    return auth.interactive_login(auth.launch_context(p, headless=False, profile=profile))
+    return auth.interactive_login(auth.launch_context(p, headless=False))
 
 
 # ──────────────────────────── output ─────────────────────────────────────────
@@ -511,7 +485,7 @@ def _install_browser() -> int:
     return result.returncode
 
 
-def _setup(p, profile: str = "default") -> int:
+def _setup(p) -> int:
     """Первичная настройка: ставит браузер (если нужно) и проводит вход."""
     log_section("Первичная настройка hhcleaner")
     if chromium_executable_exists(p):
@@ -522,8 +496,8 @@ def _setup(p, profile: str = "default") -> int:
         if rc != 0:
             return EXIT_LOGIN_FAILED
 
-    auth.clear_session(profile)
-    context = auth.interactive_login(auth.launch_context(p, headless=False, profile=profile))
+    auth.clear_session()
+    context = auth.interactive_login(auth.launch_context(p, headless=False))
     status = check_session(open_session(context))
     log(f"Проверка: {status.message}")
     context.close()
@@ -550,12 +524,6 @@ def main() -> int:
         set_log_file(args.log)
 
     # ── Команды без Playwright ────────────────────────────────────────────────
-    if args.list_profiles:
-        return list_profiles()
-
-    if args.delete_profile:
-        return delete_profile(args.delete_profile)
-
     if args.show_log is not None:
         return show_log(args.show_log, args.log if isinstance(args.log, str) else None)
 
@@ -563,7 +531,7 @@ def main() -> int:
         return clear_log(args.log if isinstance(args.log, str) else None)
 
     if args.install_schedule:
-        return install_schedule(args.schedule_day, args.schedule_time, args.profile)
+        return install_schedule(args.schedule_day, args.schedule_time)
 
     if args.uninstall_schedule:
         return uninstall_schedule()
@@ -574,9 +542,9 @@ def main() -> int:
     try:
         with sync_playwright() as p:
             if args.self_check:
-                return self_check(args.profile)
+                return self_check()
             if args.setup:
-                return _setup(p, profile=args.profile)
+                return _setup(p)
             return _run(p, args, cutoff=cutoff)
     except auth.LoginError as e:
         log_err(str(e))
@@ -588,24 +556,22 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
     # Детект первого запуска: нет браузера + нет сессии -> предлагаем --setup.
     if not chromium_executable_exists(p):
         log_err("Браузер Playwright (Chromium) не установлен.")
-        if not args.no_input and not auth.session_exists(args.profile):
+        if not args.no_input and not auth.session_exists():
             log_warn("Похоже, это первый запуск. Запустить автоматическую настройку?")
             try:
                 answer = input("  hhcleaner --setup [Y/n]: ").strip().lower()
             except EOFError:
                 answer = "n"
             if answer in ("", "y", "yes", "д", "да"):
-                return _setup(p, profile=args.profile)
+                return _setup(p)
         log_err("Установите браузер: hhcleaner --setup")
         log_err("Либо вручную:       playwright install chromium")
         return EXIT_NO_BROWSER
 
-    profile = args.profile
-
     # ── Режим «только вход» ───────────────────────────────────────────────────
     if args.login_only:
-        auth.clear_session(profile)
-        context = auth.interactive_login(auth.launch_context(p, headless=False, profile=profile))
+        auth.clear_session()
+        context = auth.interactive_login(auth.launch_context(p, headless=False))
         status = check_session(open_session(context))
         log(f"Проверка: {status.message}")
         if not status.ok:
@@ -616,14 +582,14 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
 
     # ── Режим проверки сессии ─────────────────────────────────────────────────
     if args.check:
-        if not auth.session_exists(profile):
+        if not auth.session_exists():
             result = {"ok": False, "reason": "no_session", "chats": None}
             if args.output == "json":
                 _emit_json(result)
             else:
                 log_err("Сохранённой сессии нет — выполните вход: hhcleaner --login-only")
             return EXIT_NEED_LOGIN
-        context = auth.launch_context(p, headless=not args.headed, profile=profile)
+        context = auth.launch_context(p, headless=not args.headed)
         status = check_session(open_session(context))
         log(f"Проверка: {status.message}")
         context.close()
@@ -642,10 +608,10 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
 
     # ── Режим статистики ──────────────────────────────────────────────────────
     if args.status:
-        if not auth.session_exists(profile):
+        if not auth.session_exists():
             log_err("Сохранённой сессии нет — выполните вход: hhcleaner --login-only")
             return EXIT_NEED_LOGIN
-        context = auth.launch_context(p, headless=not args.headed, profile=profile)
+        context = auth.launch_context(p, headless=not args.headed)
         session = open_session(context)
         status = check_session(session)
         log(f"Проверка: {status.message}")
@@ -654,7 +620,7 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
             context.close()
             return EXIT_NEED_LOGIN
         stats = gather_stats(session, days=args.days)
-        prev = load_snapshot(profile)
+        prev = load_snapshot()
         if args.output == "json":
             _emit_json({
                 "days": args.days,
@@ -663,12 +629,12 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
             })
         else:
             _print_stats(stats, args.days, prev=prev)
-        save_snapshot(profile, stats)
+        save_snapshot(stats)
         context.close()
         return EXIT_OK
 
     # ── Основной прогон ───────────────────────────────────────────────────────
-    context = _prepare_context(p, args.relogin, args.headed, profile)
+    context = _prepare_context(p, args.relogin, args.headed)
     session = open_session(context)
     status = check_session(session)
     log(f"Проверка: {status.message}")
@@ -682,7 +648,7 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
             return EXIT_NEED_LOGIN
         log_warn("Сессия не работает — открываю окно входа.")
         context.close()
-        context = auth.interactive_login(auth.launch_context(p, headless=False, profile=profile))
+        context = auth.interactive_login(auth.launch_context(p, headless=False))
         session = open_session(context)
         status = check_session(session)
         log(f"Проверка: {status.message}")
