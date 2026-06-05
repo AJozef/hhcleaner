@@ -1,16 +1,16 @@
-"""Системные уведомления для безлюдного режима (--no-input).
+"""Системные уведомления (Windows toast) для безлюдного режима (--no-input).
 
 Вызывается, когда запланированный прогон обнаруживает протухшую сессию
-и не может открыть окно входа. Без уведомления пользователь узнаёт об
-этом только если сам заглянет в лог.
+и не может открыть окно входа, либо когда прогон успешно завершился.
+Без уведомления пользователь узнаёт об этом только если сам заглянет в лог.
 
 Реализация: fire-and-forget subprocess; любой сбой — тихо игнорируем
-(лог уже написан, окно не нужно).
+(лог уже написан, окно не нужно). На не-Windows функция тихо ничего не делает.
 """
 from __future__ import annotations
 
+import platform
 import subprocess
-import sys
 
 _APP = "HHCleaner"
 
@@ -47,16 +47,10 @@ def done(results: dict) -> None:
 
 
 def _notify(title: str, body: str) -> None:
-    if sys.platform == "win32":
-        _win_toast(title, body)
-    elif sys.platform == "darwin":
-        _mac_notify(title, body)
-    else:
-        _linux_notify(title, body)
+    """Показывает Windows-toast. На не-Windows — no-op."""
+    if platform.system() != "Windows":
+        return
 
-
-def _win_toast(title: str, body: str) -> None:
-    """Toast через WinRT (Windows 10/11). CREATE_NO_WINDOW — консоль не всплывает."""
     # PowerShell 5.1 грузит WinRT-типы через ContentType=WindowsRuntime.
     # InnerText безопаснее AppendChild для строк с кавычками.
     script = (
@@ -83,34 +77,6 @@ def _win_toast(title: str, body: str) -> None:
         pass
 
 
-def _mac_notify(title: str, body: str) -> None:
-    try:
-        subprocess.Popen(  # pylint: disable=consider-using-with
-            ["osascript", "-e",
-             f'display notification "{_esc_dq(body)}" with title "{_esc_dq(title)}"'],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
-
-
-def _linux_notify(title: str, body: str) -> None:
-    try:
-        subprocess.Popen(  # pylint: disable=consider-using-with
-            ["notify-send", "--urgency=critical", title, body],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
-
-
 def _esc(s: str) -> str:
     """Экранирует одинарную кавычку для вставки в PowerShell-строку в одинарных кавычках."""
     return s.replace("'", "''")
-
-
-def _esc_dq(s: str) -> str:
-    """Экранирует двойную кавычку для AppleScript/bash строк в двойных кавычках."""
-    return s.replace('"', '\\"')
