@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Callable, NamedTuple
 
 import requests
@@ -110,6 +111,34 @@ def open_session(context, workers: int = 1) -> requests.Session | None:
 # ──────────────────────────── HTTP helpers ────────────────────────────────────
 
 
+def _parse_retry_after(value: str | None) -> float | None:
+    """Парсит заголовок Retry-After в секунды (или None, если не разобрался).
+
+    RFC 7231 допускает два формата:
+    1) число секунд («120»);
+    2) HTTP-date («Wed, 21 Oct 2025 07:28:00 GMT») — высчитываем дельту от now().
+
+    Отрицательные значения клампим к 0 (просьба «уже можно»).
+    """
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        dt = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = (dt - datetime.now(timezone.utc)).total_seconds()
+    return max(0.0, delta)
+
+
 def _request_with_retry(
     session: requests.Session,
     method: str,
@@ -119,21 +148,40 @@ def _request_with_retry(
     retries: int = 3,
     **kwargs,
 ) -> requests.Response | None:
-    """Выполняет HTTP-запрос с повтором при сетевых сбоях.
+    """Выполняет HTTP-запрос с повтором при сетевых сбоях и 429.
 
-    Возвращает Response или None при исчерпании попыток.
-    Статусы 4xx/5xx не считаются сбоем — отдаются вызывающему.
-    Задержка между попытками — экспоненциальная: RETRY_BACKOFF × 2^attempt.
+    Возвращает Response или None при исчерпании попыток на сетевом сбое.
+    На 429 пытается уважить заголовок Retry-After (секунды или HTTP-date);
+    если заголовок отсутствует — экспоненциальный backoff RETRY_BACKOFF×2^attempt.
+    После исчерпания retry на 429 возвращает последний Response (с status 429),
+    чтобы вызывающий код мог его обработать.
+    Прочие 4xx/5xx не ретраятся — отдаются вызывающему как есть.
     """
     kwargs.setdefault("timeout", 30)
+    last_resp: requests.Response | None = None
+
     for attempt in range(retries):
         try:
-            return session.request(method, url, **kwargs)
+            resp = session.request(method, url, **kwargs)
         except requests.exceptions.RequestException as e:
             log(f"  ! Ошибка {what} (попытка {attempt + 1}/{retries}): {e}")
             if attempt < retries - 1:
                 time.sleep(RETRY_BACKOFF * (2 ** attempt))
-    return None
+            continue
+
+        last_resp = resp
+
+        if resp.status_code == 429 and attempt < retries - 1:
+            pause = _parse_retry_after(resp.headers.get("Retry-After"))
+            if pause is None:
+                pause = RETRY_BACKOFF * (2 ** attempt)
+            log(f"  ! 429 {what} — пауза {pause:.1f}с и повтор")
+            time.sleep(pause)
+            continue
+
+        return resp
+
+    return last_resp
 
 
 def _get_chats_page(
