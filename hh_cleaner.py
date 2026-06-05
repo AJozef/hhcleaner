@@ -26,15 +26,8 @@ hh_cleaner.py — точка входа.
     hhcleaner --install-schedule --schedule-day FRI --schedule-time 10:00
     hhcleaner --uninstall-schedule               # снять задачу с планировщика
     hhcleaner --self-check                       # диагностика окружения
-    hhcleaner --list-profiles                    # список сохранённых профилей
-    hhcleaner --delete-profile work              # удалить профиль
     hhcleaner --show-log 100                     # последние 100 строк лога
     hhcleaner --clear-log                        # очистить лог
-    hhcleaner config show                        # текущий конфиг и его источники
-    hhcleaner config set days 30                 # сохранить дефолт в config.toml
-    hhcleaner config set profile work
-    hhcleaner config unset days                  # убрать дефолт
-    hhcleaner config reset                       # сбросить весь config.toml
 
 Коды выхода: 0 — успех, 2 — вход не удался, 3 — нужен ручной вход (--login-only),
 4 — не установлен браузер Playwright (запустите --setup).
@@ -57,7 +50,6 @@ except ImportError:
 from rich.table import Table
 from playwright.sync_api import sync_playwright
 
-import app_config
 import auth
 import notify
 from chats_api import (
@@ -75,7 +67,6 @@ from chats_browser import (
 )
 from cli_cmds import (
     chromium_executable_exists,
-    cmd_config,
     clear_log,
     self_check,
     show_log,
@@ -138,14 +129,10 @@ EXIT_NO_BROWSER   = 4
 
 
 def parse_args() -> argparse.Namespace:
-    """Разбирает аргументы командной строки. Дефолты берёт из config.toml."""
+    """Разбирает аргументы командной строки."""
     parser = argparse.ArgumentParser(
         description="Очистка hh.ru: отклики-отказы, чаты-отказы и старые чаты.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Подкоманды (без --): hhcleaner config show|set|unset|reset\n"
-            "Справка по конфигу:   hhcleaner config --help"
-        ),
     )
     parser.add_argument("--version", action="version", version=f"hhcleaner {__version__}")
     parser.add_argument(
@@ -270,14 +257,9 @@ def parse_args() -> argparse.Namespace:
         help=f"Время запуска для --install-schedule. По умолчанию {SCHEDULE_TIME}.",
     )
 
-    # Применяем дефолты из config.toml ПЕРЕД парсингом, чтобы --help показывал их.
-    cfg_defaults = app_config.as_argparse_defaults()
-    if cfg_defaults:
-        parser.set_defaults(**cfg_defaults)
-
     # workers может быть задан через HH_DELETE_WORKERS.
     env_workers = os.environ.get("HH_DELETE_WORKERS", "").strip()
-    if env_workers and "workers" not in cfg_defaults:
+    if env_workers:
         try:
             parser.set_defaults(workers=int(env_workers))
         except ValueError:
@@ -469,10 +451,6 @@ def _setup(p) -> int:
 
 def main() -> int:
     """Готовит авторизацию и выполняет выбранные шаги. Возвращает код выхода."""
-    # Подкоманда config (до argparse, чтобы не конфликтовать с positional steps).
-    if len(sys.argv) >= 2 and sys.argv[1] == "config":
-        return cmd_config(sys.argv[2:])
-
     args = parse_args()
 
     set_quiet(args.quiet)

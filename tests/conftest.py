@@ -8,9 +8,9 @@ import pytest
 def isolated_home(tmp_path, monkeypatch):
     """Изолирует каталог данных приложения во временную папку.
 
-    app_config._config_path() и config.* читают HHCLEANER_HOME при каждом
-    вызове, поэтому достаточно подменить переменную окружения — реальный
-    ~/.hhcleaner не трогается.
+    config.APP_DIR читает HHCLEANER_HOME при импорте модуля, но для
+    тестов pure-логики достаточно подменить переменную окружения —
+    реальный ~/.hhcleaner не трогается.
     """
     monkeypatch.setenv("HHCLEANER_HOME", str(tmp_path))
     return tmp_path

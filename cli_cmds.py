@@ -1,24 +1,20 @@
 """Команды hhcleaner, не требующие запущенного браузера Playwright.
 
 Содержит:
-    config   — show / set / unset / reset
-    log      — show / clear
-    doctor   — --self-check (диагностика окружения)
+    log     — show / clear
+    doctor  — --self-check (диагностика окружения)
 """
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
 
 from playwright.sync_api import sync_playwright
-from rich.table import Table
 
-import app_config
 import auth
 from config import (
-    APP_DIR, DEFAULT_LOG_FILE, OLD_CHATS_DAYS, USER_DATA_DIR, console,
+    APP_DIR, DEFAULT_LOG_FILE, USER_DATA_DIR, console,
     log, log_err, log_ok, log_section, log_warn,
 )
 
@@ -46,122 +42,6 @@ def chromium_executable_exists(p) -> bool:
         return bool(path) and os.path.exists(path)
     except Exception:  # pylint: disable=broad-exception-caught
         return False
-
-
-# ──────────────────────────── config subcommand ───────────────────────────────
-
-
-def _build_config_parser() -> argparse.ArgumentParser:
-    """Парсер подкоманды config со своими show/set/unset/reset (и --help)."""
-    known = sorted(app_config.KNOWN_KEYS)
-    keys_help = ", ".join(
-        f"{k} ({desc})" for k, (_t, desc) in sorted(app_config.KNOWN_KEYS.items())
-    )
-
-    parser = argparse.ArgumentParser(
-        prog="hhcleaner config",
-        description="Персистентный конфиг (~/.hhcleaner/config.toml). "
-                    "Приоритет: CLI-флаг > config.toml > HH_*-env > хардкод.",
-        epilog=f"Ключи: {keys_help}",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    sub = parser.add_subparsers(dest="action", metavar="show|set|unset|reset")
-
-    sub.add_parser("show", help="Показать текущие настройки и их источники.")
-
-    p_set = sub.add_parser("set", help="Установить значение: config set KEY VALUE")
-    p_set.add_argument("key", metavar="KEY", choices=known, help=f"Один из: {', '.join(known)}")
-    p_set.add_argument("value", metavar="VALUE", help="Новое значение.")
-
-    p_unset = sub.add_parser("unset", help="Убрать значение из конфига: config unset KEY")
-    p_unset.add_argument("key", metavar="KEY", choices=known, help=f"Один из: {', '.join(known)}")
-
-    sub.add_parser("reset", help="Удалить config.toml (сброс всех настроек к дефолтам).")
-    return parser
-
-
-def cmd_config(argv: list[str]) -> int:
-    """Обрабатывает `hhcleaner config show|set|unset|reset` через argparse."""
-    parser = _build_config_parser()
-    args = parser.parse_args(argv)
-    action = args.action or "show"  # без подкоманды — показываем конфиг
-
-    if action == "show":
-        _config_show()
-        return EXIT_OK
-
-    if action == "set":
-        ok, msg = app_config.set_key(args.key, args.value)
-        if ok:
-            log_ok(f"Сохранено: {msg}")
-            return EXIT_OK
-        log_err(msg)
-        return 1
-
-    if action == "unset":
-        ok, msg = app_config.unset_key(args.key)
-        if ok:
-            log_ok(msg)
-            return EXIT_OK
-        log_err(msg)
-        return 1
-
-    # action == "reset"
-    cfg_path = app_config.config_path()
-    if cfg_path.exists():
-        log_warn(f"Удалить {cfg_path} ?")
-        try:
-            answer = input("[y/N]: ").strip().lower()
-        except EOFError:
-            answer = ""
-        if answer not in ("y", "yes", "д", "да"):
-            log("Отменено.")
-            return EXIT_OK
-    if app_config.reset():
-        log_ok("Конфиг удалён. Все настройки возвращены к дефолтам.")
-    else:
-        log("Файл конфига не существовал — ничего не удалено.")
-    return EXIT_OK
-
-
-def _config_show() -> None:
-    """Выводит текущие настройки и их источник."""
-    cfg = app_config.load()
-    cfg_path = app_config.config_path()
-
-    table = Table(
-        title="[bold]Конфиг hhcleaner[/bold]",
-        show_header=True, header_style="bold cyan", box=None, padding=(0, 2),
-    )
-    table.add_column("Ключ", style="bold", no_wrap=True)
-    table.add_column("Значение", style="green")
-    table.add_column("Источник", style="dim")
-
-    def _row(key: str, env_var: str | None, hardcode: str) -> None:
-        env_val = os.environ.get(env_var, "").strip() if env_var else ""
-        cfg_val = str(cfg.get(key, "")).strip()
-        if env_val:
-            table.add_row(key, env_val, f"env {env_var}")
-        elif cfg_val:
-            table.add_row(key, cfg_val, "config.toml")
-        else:
-            table.add_row(key, hardcode, "хардкод")
-
-    _row("days",       "HH_OLD_DAYS",      str(OLD_CHATS_DAYS))
-    _row("log",        None,               f"(нет) -> {DEFAULT_LOG_FILE}")
-    _row("quiet",      None,                "false")
-    _row("headed",     None,                "false")
-    _row("max_delete", None,                "(нет ограничения)")
-    _row("workers",    "HH_DELETE_WORKERS", "1")
-
-    console.print()
-    console.print(table)
-    exists_str = "[green]существует[/green]" if cfg_path.exists() else "[dim]не создан[/dim]"
-    console.print(f"\n[dim]Файл конфига: {cfg_path} ({exists_str})[/dim]")
-    console.print(f"[dim]Каталог данных: {APP_DIR}[/dim]")
-    console.print()
-    console.print("[dim]Изменить: hhcleaner config set KEY VALUE[/dim]")
-    console.print("[dim]Сбросить: hhcleaner config reset[/dim]")
 
 
 # ──────────────────────────── log management ──────────────────────────────────
@@ -207,7 +87,7 @@ def clear_log(log_path: str | None = None) -> int:
 
 
 def self_check() -> int:
-    """Диагностика окружения: версии, браузер, сессия, конфиг."""
+    """Диагностика окружения: версии, браузер, сессия, лог."""
     log_section("Диагностика hhcleaner (--self-check)")
 
     ok_all = True
@@ -254,11 +134,6 @@ def self_check() -> int:
         session_ok,
         "hhcleaner --login-only" if not session_ok else USER_DATA_DIR,
     )
-
-    # Конфиг
-    cfg_path = app_config.config_path()
-    _chk("config.toml", cfg_path.exists(),
-         str(cfg_path) if not cfg_path.exists() else f"{cfg_path} (OK)")
 
     # Каталог данных + лог
     _chk(
