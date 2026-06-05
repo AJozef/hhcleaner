@@ -17,9 +17,7 @@ hh_cleaner.py — точка входа.
     hhcleaner old-chats --since 2025-01-01       # старые чаты начиная с даты
     hhcleaner negotiations old-chats             # выбранный набор шагов
     hhcleaner --status                           # статистика по чатам без удаления
-    hhcleaner --status --output json             # та же статистика в JSON (для скриптов)
     hhcleaner --check                            # только проверить сессию (код 0/3)
-    hhcleaner --check --output json              # проверка сессии в JSON
     hhcleaner --quiet --no-input --log           # безлюдный прогон с записью в лог
     hhcleaner --relogin                          # сменить аккаунт (новый вход) + шаги
     hhcleaner --max-delete 20                    # удалить не более 20 элементов за шаг
@@ -44,14 +42,12 @@ hh_cleaner.py — точка входа.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
 
 try:
     import argcomplete as _argcomplete_mod
@@ -81,8 +77,6 @@ from cli_cmds import (
     chromium_executable_exists,
     cmd_config,
     clear_log,
-    load_snapshot,
-    save_snapshot,
     self_check,
     show_log,
 )
@@ -233,10 +227,6 @@ def parse_args() -> argparse.Namespace:
     grp_out.add_argument(
         "-q", "--quiet", action="store_true",
         help="Тихий режим: выводить только итоговую сводку.",
-    )
-    grp_out.add_argument(
-        "--output", choices=["text", "json"], default="text",
-        help="Формат вывода итогов: text (таблица) или json (для скриптов).",
     )
     grp_out.add_argument(
         "--log", nargs="?", const=DEFAULT_LOG_FILE, metavar="FILE",
@@ -409,25 +399,8 @@ def _print_summary(results: dict[str, int], elapsed: float, dry_run: bool) -> No
         out.print(f"[dim]Время выполнения: {elapsed:.1f} с[/dim]")
 
 
-def _print_stats(
-    stats: dict[str, int],
-    days: int,
-    prev: dict[str, Any] | None = None,
-) -> None:
-    """Выводит таблицу статистики. prev — снапшот прошлого прогона для дельты."""
-    prev_stats = prev.get("stats", {}) if prev else {}
-    prev_ts    = prev.get("ts") if prev else None
-
-    def _delta(key: str) -> str:
-        if not prev_stats or key not in prev_stats:
-            return ""
-        d = stats[key] - prev_stats[key]
-        if d > 0:
-            return f"[red]+{d}[/red]"
-        if d < 0:
-            return f"[green]{d}[/green]"
-        return "[dim]=0[/dim]"
-
+def _print_stats(stats: dict[str, int], days: int) -> None:
+    """Выводит таблицу статистики чатов."""
     rows = [
         ("total",            "Всего чатов"),
         ("unread",           "Непрочитанных"),
@@ -435,37 +408,20 @@ def _print_stats(
         ("archived_vacancy", "По архивным вакансиям (кроме собеседований)"),
         ("old",              f"Старше {days} дней"),
     ]
-    title = "[bold]Статистика чатов[/bold]"
-    if prev_ts:
-        try:
-            dt = datetime.fromisoformat(prev_ts)
-            title += f"\n[dim]Дельта с {dt.strftime('%Y-%m-%d %H:%M')} UTC[/dim]"
-        except ValueError:
-            pass
-
-    table = Table(title=title, show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+    table = Table(
+        title="[bold]Статистика чатов[/bold]",
+        show_header=True, header_style="bold cyan", box=None, padding=(0, 2),
+    )
     table.add_column("Показатель", style="default", no_wrap=True)
     table.add_column("Кол-во", justify="right", style="bold green")
-    if prev_stats:
-        table.add_column("Изменение", justify="right")
-
     for key, label in rows:
-        val = str(stats.get(key, 0))
-        if prev_stats:
-            table.add_row(label, val, _delta(key))
-        else:
-            table.add_row(label, val)
+        table.add_row(label, str(stats.get(key, 0)))
 
     for out in (console, file_console()):
         if out is None:
             continue
         out.print()
         out.print(table)
-
-
-def _emit_json(payload: dict) -> None:
-    """Печатает компактный JSON в stdout."""
-    print(json.dumps(payload, ensure_ascii=False))
 
 
 # ──────────────────────────── browser / setup ─────────────────────────────────
@@ -519,7 +475,7 @@ def main() -> int:
 
     args = parse_args()
 
-    set_quiet(args.quiet or args.output == "json")
+    set_quiet(args.quiet)
     if args.log:
         set_log_file(args.log)
 
@@ -583,24 +539,13 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
     # ── Режим проверки сессии ─────────────────────────────────────────────────
     if args.check:
         if not auth.session_exists():
-            result = {"ok": False, "reason": "no_session", "chats": None}
-            if args.output == "json":
-                _emit_json(result)
-            else:
-                log_err("Сохранённой сессии нет — выполните вход: hhcleaner --login-only")
+            log_err("Сохранённой сессии нет — выполните вход: hhcleaner --login-only")
             return EXIT_NEED_LOGIN
         context = auth.launch_context(p, headless=not args.headed)
         status = check_session(open_session(context))
         log(f"Проверка: {status.message}")
         context.close()
-        if args.output == "json":
-            _emit_json({
-                "ok": status.ok,
-                "reason": None if status.ok else "session_invalid",
-                "chats": status.chats,
-                "message": status.message,
-            })
-        elif status.ok:
+        if status.ok:
             log_ok("Сессия рабочая.")
         else:
             log_err("Сессия не работает — выполните вход: hhcleaner --login-only")
@@ -620,16 +565,7 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
             context.close()
             return EXIT_NEED_LOGIN
         stats = gather_stats(session, days=args.days)
-        prev = load_snapshot()
-        if args.output == "json":
-            _emit_json({
-                "days": args.days,
-                "stats": stats,
-                "prev": prev,
-            })
-        else:
-            _print_stats(stats, args.days, prev=prev)
-        save_snapshot(stats)
+        _print_stats(stats, args.days)
         context.close()
         return EXIT_OK
 
@@ -674,14 +610,7 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
     )
     elapsed = time.monotonic() - start
 
-    if args.output == "json":
-        _emit_json({
-            "dry_run": args.dry_run,
-            "elapsed_sec": round(elapsed, 1),
-            "results": results,
-        })
-    else:
-        _print_summary(results, elapsed, args.dry_run)
+    _print_summary(results, elapsed, args.dry_run)
 
     if args.no_input and not args.dry_run:
         notify.done(results)

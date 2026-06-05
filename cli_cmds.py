@@ -3,19 +3,14 @@
 Содержит:
     config   — show / set / unset / reset
     log      — show / clear
-    status   — снапшоты для delta-сравнения
     doctor   — --self-check (диагностика окружения)
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
-from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
-from typing import Any
 
 from playwright.sync_api import sync_playwright
 from rich.table import Table
@@ -206,36 +201,6 @@ def clear_log(log_path: str | None = None) -> int:
         pass  # открытие в режиме "w" обрезает файл до нуля
     log_ok("Лог очищен.")
     return EXIT_OK
-
-
-# ──────────────────────────── status delta ────────────────────────────────────
-
-
-def snapshot_path() -> Path:
-    """Путь к файлу снапшота статистики."""
-    return Path(APP_DIR) / "last_status.json"
-
-
-def load_snapshot() -> dict[str, Any] | None:
-    """Загружает последний снапшот статистики. None если не существует или повреждён."""
-    p = snapshot_path()
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # pylint: disable=broad-exception-caught
-        return None
-
-
-def save_snapshot(stats: dict[str, int]) -> None:
-    """Сохраняет текущую статистику как снапшот (best-effort)."""
-    p = snapshot_path()
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        data = {"ts": datetime.now(timezone.utc).isoformat(), "stats": stats}
-        p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
 
 
 # ──────────────────────────── self-check ─────────────────────────────────────
