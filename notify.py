@@ -12,6 +12,8 @@ from __future__ import annotations
 import platform
 import subprocess
 
+from steps import NOTIFY_LABELS
+
 _APP = "HHCleaner"
 
 
@@ -29,16 +31,8 @@ def done(results: dict) -> None:
     Вызывается в --no-input режиме (запуск по расписанию): пользователь не
     смотрит в терминал, поэтому toast — единственный способ узнать результат.
     """
-    _labels = {
-        "read-all":               "прочитано чатов",
-        "negotiations":           "откликов удалено",
-        "chats-rejected":         "чатов-отказов удалено",
-        "archived-vacancy":       "архивных чатов удалено",
-        "old-chats":              "старых чатов удалено",
-        "chats-rejected-browser": "чатов-отказов удалено",
-    }
     parts = [
-        f"{count} {_labels.get(key, key)}"
+        f"{count} {NOTIFY_LABELS.get(key, key)}"
         for key, count in results.items()
         if count > 0
     ]

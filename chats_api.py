@@ -27,6 +27,7 @@ from config import (
     log_section,
     parse_iso_datetime,
 )
+from steps import API_STEPS, SCAN_LABELS
 
 
 class ChatAPIError(Exception):
@@ -38,6 +39,10 @@ class ChatAPIError(Exception):
 
 def open_session(context) -> requests.Session | None:
     """Открывает chatik, забирает куки и создаёт requests-сессию (или None).
+
+    Важно: «быстрый» API-путь всё равно требует живого браузера — куки берутся
+    из запущенного Chromium (вход возможен только через UI). API экономит не
+    запуск браузера, а клики по каждому чату: HTTP вместо навигации.
 
     Страницу НЕ закрываем намеренно: в persistent context закрытие последней
     страницы автоматически закрывает весь контекст, и последующие new_page()
@@ -57,6 +62,10 @@ def open_session(context) -> requests.Session | None:
         log("Не удалось открыть chatik — сессию создать нельзя.")
         return None
 
+    # Снимок кук делается один раз и зашивается в статический заголовок Cookie.
+    # На обычном прогоне (минуты) этого хватает; но если hh за время прогона
+    # ротирует _xsrf, requests-сессия об этом не узнает и удаления начнут ловить
+    # 403. Тогда лечение — перезапуск (новый open_session снимет свежие куки).
     cookies = context.cookies()
     cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
     xsrf = next((c["value"] for c in cookies if c["name"] == "_xsrf"), None)
@@ -349,6 +358,12 @@ def mark_all_chats_read(session: requests.Session) -> int:
     page_num = 0
     while True:
         resp = _get_chats_page(session, page_num, only_unread=True)
+        if resp is not None and resp.status_code in (401, 403):
+            # Авторизация отвалилась — сигналим так же, как _get_all_chats_pages,
+            # чтобы вызывающий код обработал это единообразно.
+            raise ChatAPIError(
+                f"chatik API: статус {resp.status_code} — авторизация не прошла"
+            )
         if not resp or resp.status_code != 200:
             break
         chats = resp.json().get("chats", {})
@@ -440,15 +455,6 @@ def gather_stats(
     return stats
 
 
-# Шаги, объединяемые в единый проход пагинации.
-_API_STEPS = ("chats-rejected", "archived-vacancy", "old-chats")
-
-_STEP_LABELS: dict[str, str] = {
-    "chats-rejected":  "Чатов с отказами",
-    "archived-vacancy": "Чатов по архивным вакансиям",
-}
-
-
 def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     session: requests.Session,
     steps: list[str],
@@ -462,7 +468,7 @@ def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-po
     cutoff — абсолютная дата среза для old-chats (из --since). Если None —
     вычисляется из days. Приоритет: cutoff > days.
     """
-    active = [s for s in _API_STEPS if s in steps]
+    active = [s for s in API_STEPS if s in steps]
     if not active:
         return {}
 
@@ -492,7 +498,7 @@ def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-po
     for step in active:
         ids = collected.get(step, [])
         # old-chats: лейбл из фактического порога (cutoff/--days).
-        label = _STEP_LABELS.get(step, f"Чатов старше {effective_cutoff:%Y-%m-%d}")
+        label = SCAN_LABELS.get(step, f"Чатов старше {effective_cutoff:%Y-%m-%d}")
         log(f"{label}: {len(ids)}")
         results[step] = _leave_chats(
             session, ids, dry_run=dry_run, limit=limit

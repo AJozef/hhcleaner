@@ -65,6 +65,10 @@ from cli_cmds import (
 )
 from config import (
     DEFAULT_LOG_FILE,
+    EXIT_LOGIN_FAILED,
+    EXIT_NEED_LOGIN,
+    EXIT_NO_BROWSER,
+    EXIT_OK,
     OLD_CHATS_DAYS,
     console,
     file_console,
@@ -84,33 +88,10 @@ from scheduler import (
     install_schedule,
     uninstall_schedule,
 )
+from steps import ALL_STEPS, API_STEPS, DEFAULT_STEPS, STEP_LABELS
 
 # Версия — единый источник истины в pyproject.toml; читаем из метаданных пакета.
 __version__ = package_version()
-
-# Все доступные шаги; шаги по умолчанию запускаются, если ничего не указано.
-ALL_STEPS = [
-    "read-all",                # пометить прочитанными все непрочитанные чаты
-    "negotiations",            # отклики со статусом «отказ»
-    "chats-rejected",          # чаты с отказами: API, при падении — браузер (фолбэк)
-    "archived-vacancy",        # чаты по архивным вакансиям, кроме собеседований
-    "old-chats",               # чаты старше N дней
-]
-DEFAULT_STEPS = ["read-all", "negotiations", "chats-rejected", "archived-vacancy", "old-chats"]
-
-STEP_LABELS = {
-    "read-all":               "Чатов прочитано",
-    "negotiations":           "Откликов удалено",
-    "chats-rejected":         "Чатов-отказов удалено",
-    "archived-vacancy":       "Чатов по архивным вакансиям удалено",
-    "old-chats":              "Старых чатов удалено",
-}
-
-# Коды выхода.
-EXIT_OK           = 0
-EXIT_LOGIN_FAILED = 2
-EXIT_NEED_LOGIN   = 3
-EXIT_NO_BROWSER   = 4
 
 
 # ──────────────────────────── arg parsing ─────────────────────────────────────
@@ -135,11 +116,16 @@ def _iso_date(value: str) -> datetime:
     дефолтное окно --days.
     """
     try:
-        return datetime.strptime(value.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        dt = datetime.strptime(value.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
             f"ожидается дата в формате YYYY-MM-DD, получено «{value}»"
         ) from exc
+    if dt > datetime.now(timezone.utc):
+        raise argparse.ArgumentTypeError(
+            f"дата --since в будущем ({value}). Укажите прошедшую дату."
+        )
+    return dt
 
 
 def parse_args() -> argparse.Namespace:
@@ -234,6 +220,10 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     grp_out.add_argument(
+        "-y", "--yes", action="store_true",
+        help="Отвечать «да» на подтверждения (для безлюдного режима, напр. --clear-log).",
+    )
+    grp_out.add_argument(
         "--headed", action="store_true",
         help="Показать окно браузера (по умолчанию скрыто, кроме входа).",
     )
@@ -284,7 +274,13 @@ def run_steps(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     """
     results: dict[str, int] = {}
     if "read-all" in steps:
-        results["read-all"] = mark_all_chats_read(session)
+        try:
+            results["read-all"] = mark_all_chats_read(session)
+        except ChatAPIError as e:
+            # read-all ходит только через API; браузерного аналога нет —
+            # не валим прогон, но и не глотаем сбой молча.
+            log_warn(f"Не удалось пометить чаты прочитанными (chatik API: {e}).")
+            results["read-all"] = 0
     if "negotiations" in steps:
         neg_page = context.new_page()
         try:
@@ -294,7 +290,7 @@ def run_steps(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         finally:
             neg_page.close()
 
-    api_steps = [s for s in ("chats-rejected", "archived-vacancy", "old-chats") if s in steps]
+    api_steps = [s for s in API_STEPS if s in steps]
     if api_steps:
         try:
             results.update(
@@ -335,6 +331,26 @@ def _prepare_context(p, relogin: bool, headed: bool):
         return auth.launch_context(p, headless=not headed)
     log("Сохранённой сессии нет — нужно войти один раз.")
     return auth.interactive_login(auth.launch_context(p, headless=False))
+
+
+def _open_and_check(context, prefix: str = "Проверка"):
+    """open_session + check_session + лог проверки. Возвращает (session, status).
+
+    Повторяется во всех режимах _run (login-only/check/status/основной), поэтому
+    вынесено сюда. prefix меняет префикс лога (напр. «После тихого перелогина»).
+    """
+    session = open_session(context)
+    status = check_session(session)
+    log(f"{prefix}: {status.message}")
+    return session, status
+
+
+def _require_saved_session() -> bool:
+    """True, если есть сохранённая сессия; иначе печатает подсказку и False."""
+    if auth.session_exists():
+        return True
+    log_err("Сохранённой сессии нет — выполните вход: hhcleaner --login-only")
+    return False
 
 
 # ──────────────────────────── output ─────────────────────────────────────────
@@ -441,7 +457,11 @@ def main() -> int:
         return show_log(args.show_log, args.log if isinstance(args.log, str) else None)
 
     if args.clear_log:
-        return clear_log(args.log if isinstance(args.log, str) else None)
+        log_path = args.log if isinstance(args.log, str) else None
+        if args.no_input and not args.yes:
+            log_err("Очистка лога требует подтверждения: добавьте --yes для безлюдного режима.")
+            return EXIT_OK
+        return clear_log(log_path, assume_yes=args.yes)
 
     if args.install_schedule:
         return install_schedule(args.schedule_day, args.schedule_time)
@@ -449,12 +469,15 @@ def main() -> int:
     if args.uninstall_schedule:
         return uninstall_schedule()
 
+    # self_check сам открывает sync_playwright внутри — держим его здесь, до
+    # внешнего контекста, иначе Chromium-движок поднимался бы дважды (вложенно).
+    if args.self_check:
+        return self_check()
+
     cutoff: datetime | None = args.since
 
     try:
         with sync_playwright() as p:
-            if args.self_check:
-                return self_check()
             if args.setup:
                 return _setup(p)
             return _run(p, args, cutoff=cutoff)
@@ -469,6 +492,8 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
     if not chromium_executable_exists(p):
         log_err("Браузер Playwright (Chromium) не установлен.")
         if not args.no_input and not auth.session_exists():
+            if args.yes:
+                return _setup(p)
             log_warn("Похоже, это первый запуск. Запустить автоматическую настройку?")
             try:
                 answer = input("  hhcleaner --setup [Y/n]: ").strip().lower()
@@ -484,8 +509,7 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
     if args.login_only:
         auth.clear_session()
         context = auth.interactive_login(auth.launch_context(p, headless=False))
-        status = check_session(open_session(context))
-        log(f"Проверка: {status.message}")
+        _session, status = _open_and_check(context)
         if not status.ok:
             log_err("Вход не подтвердился — попробуй --login-only ещё раз.")
         context.close()
@@ -494,12 +518,10 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
 
     # ── Режим проверки сессии ─────────────────────────────────────────────────
     if args.check:
-        if not auth.session_exists():
-            log_err("Сохранённой сессии нет — выполните вход: hhcleaner --login-only")
+        if not _require_saved_session():
             return EXIT_NEED_LOGIN
         context = auth.launch_context(p, headless=not args.headed)
-        status = check_session(open_session(context))
-        log(f"Проверка: {status.message}")
+        _session, status = _open_and_check(context)
         context.close()
         if status.ok:
             log_ok("Сессия рабочая.")
@@ -509,13 +531,10 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
 
     # ── Режим статистики ──────────────────────────────────────────────────────
     if args.status:
-        if not auth.session_exists():
-            log_err("Сохранённой сессии нет — выполните вход: hhcleaner --login-only")
+        if not _require_saved_session():
             return EXIT_NEED_LOGIN
         context = auth.launch_context(p, headless=not args.headed)
-        session = open_session(context)
-        status = check_session(session)
-        log(f"Проверка: {status.message}")
+        session, status = _open_and_check(context)
         if not status.ok or session is None:
             log_err("Сессия не работает — выполните вход: hhcleaner --login-only")
             context.close()
@@ -535,16 +554,12 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         return EXIT_NEED_LOGIN
 
     context = _prepare_context(p, args.relogin, args.headed)
-    session = open_session(context)
-    status = check_session(session)
-    log(f"Проверка: {status.message}")
+    session, status = _open_and_check(context)
 
     if not status.ok and auth.has_login_credentials():
         log_warn("Сессия не работает — пробую тихий перелогин из HH_EMAIL/HH_PASSWORD.")
         if auth.headless_login(context):
-            session = open_session(context)
-            status = check_session(session)
-            log(f"После тихого перелогина: {status.message}")
+            session, status = _open_and_check(context, "После тихого перелогина")
         else:
             log_warn("Тихий перелогин не удался (возможно, капча или 2FA).")
 
@@ -560,9 +575,7 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         log_warn("Сессия не работает — открываю окно входа.")
         context.close()
         context = auth.interactive_login(auth.launch_context(p, headless=False))
-        session = open_session(context)
-        status = check_session(session)
-        log(f"Проверка: {status.message}")
+        session, status = _open_and_check(context)
         if not status.ok:
             log_err("Вход не удался.")
             context.close()
