@@ -1,6 +1,8 @@
 """Тесты parse_args — дефолты, env-переменные, precedence."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 import hh_cleaner
@@ -14,38 +16,14 @@ def _parse(monkeypatch, argv):
 
 class TestDefaults:
     def test_no_args_uses_baseline(self, monkeypatch):
-        monkeypatch.delenv("HH_DELETE_WORKERS", raising=False)
         args = _parse(monkeypatch, [])
         # steps пуст — caller подставит DEFAULT_STEPS.
         assert args.steps == []
-        assert args.workers == 1
         assert args.dry_run is False
         assert args.no_input is False
         assert args.quiet is False
         assert args.headed is False
         assert args.since is None
-
-
-class TestWorkersPrecedence:
-    def test_workers_from_cli(self, monkeypatch):
-        monkeypatch.delenv("HH_DELETE_WORKERS", raising=False)
-        args = _parse(monkeypatch, ["--workers", "5"])
-        assert args.workers == 5
-
-    def test_workers_from_env(self, monkeypatch):
-        monkeypatch.setenv("HH_DELETE_WORKERS", "4")
-        args = _parse(monkeypatch, [])
-        assert args.workers == 4
-
-    def test_cli_overrides_env(self, monkeypatch):
-        monkeypatch.setenv("HH_DELETE_WORKERS", "4")
-        args = _parse(monkeypatch, ["--workers", "8"])
-        assert args.workers == 8
-
-    def test_invalid_env_falls_back_to_default(self, monkeypatch):
-        monkeypatch.setenv("HH_DELETE_WORKERS", "not a number")
-        args = _parse(monkeypatch, [])
-        assert args.workers == 1
 
 
 class TestFlags:
@@ -69,9 +47,15 @@ class TestFlags:
         args = _parse(monkeypatch, ["--headed"])
         assert args.headed is True
 
-    def test_since_passed_as_string(self, monkeypatch):
+    def test_since_parsed_to_utc_datetime(self, monkeypatch):
         args = _parse(monkeypatch, ["--since", "2025-01-15"])
-        assert args.since == "2025-01-15"
+        assert args.since == datetime(2025, 1, 15, tzinfo=timezone.utc)
+
+    def test_since_invalid_date_rejected(self, monkeypatch):
+        # Битая дата у удаляющего инструмента должна остановить запуск,
+        # а не молча уйти на дефолтное окно --days.
+        with pytest.raises(SystemExit):
+            _parse(monkeypatch, ["--since", "2025-13-99"])
 
     def test_max_delete(self, monkeypatch):
         args = _parse(monkeypatch, ["--max-delete", "20"])
@@ -90,3 +74,16 @@ class TestSteps:
     def test_single_step(self, monkeypatch):
         args = _parse(monkeypatch, ["read-all"])
         assert args.steps == ["read-all"]
+
+
+class TestNumericValidation:
+    @pytest.mark.parametrize("flag", ["--days", "--max-delete"])
+    @pytest.mark.parametrize("bad", ["0", "-1", "abc", "1.5"])
+    def test_rejects_non_positive_and_non_int(self, monkeypatch, flag, bad):
+        with pytest.raises(SystemExit):
+            _parse(monkeypatch, [flag, bad])
+
+    @pytest.mark.parametrize("flag,attr", [("--days", "days"), ("--max-delete", "max_delete")])
+    def test_accepts_positive(self, monkeypatch, flag, attr):
+        args = _parse(monkeypatch, [flag, "7"])
+        assert getattr(args, attr) == 7

@@ -65,14 +65,13 @@ class TestRunSteps:
         session = MagicMock()
         results = hh_cleaner.run_steps(
             ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"],
-            days=45, dry_run=False, limit=None, cutoff=None, workers=3,
+            days=45, dry_run=False, limit=None, cutoff=None,
         )
         assert mocked_steps["delete_chats_api_combined"].call_count == 1
         kwargs = mocked_steps["delete_chats_api_combined"].call_args.kwargs
         assert kwargs["dry_run"] is False
         assert kwargs["limit"] is None
         assert kwargs["cutoff"] is None
-        assert kwargs["workers"] == 3
         assert results["chats-rejected"] == 2
         assert results["archived-vacancy"] == 1
         assert results["old-chats"] == 4
@@ -86,26 +85,15 @@ class TestRunSteps:
             days=30,
         )
         mocked_steps["delete_rejected_chats"].assert_called_once_with(
-            ctx, dry_run=False
+            ctx, dry_run=False, limit=None
         )
         mocked_steps["delete_archived_vacancy_chats_browser"].assert_called_once_with(
-            ctx, dry_run=False
+            ctx, dry_run=False, limit=None
         )
         mocked_steps["delete_old_chats_browser"].assert_called_once()
         assert results["chats-rejected"] == 7
         assert results["archived-vacancy"] == 8
         assert results["old-chats"] == 9
-
-    def test_chats_rejected_browser_explicit_step(self, mocked_steps):
-        ctx, _ = _make_context()
-        session = MagicMock()
-        results = hh_cleaner.run_steps(
-            ctx, session, ["chats-rejected-browser"], days=30, dry_run=True,
-        )
-        assert results == {"chats-rejected-browser": 7}
-        mocked_steps["delete_rejected_chats"].assert_called_once_with(
-            ctx, dry_run=True
-        )
 
     def test_negotiations_page_closed_on_exception(self, mocked_steps):
         ctx, page = _make_context()

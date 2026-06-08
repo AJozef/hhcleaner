@@ -20,9 +20,6 @@ dependencies = [
     "playwright>=1.50,<2",
     "python-dotenv>=1.0,<2",
     "rich>=13.9,<16",
-    # Shell tab-completion для argparse: активируется один раз через
-    # `activate-global-python-argcomplete` или eval "$(register-python-argcomplete hhcleaner)".
-    "argcomplete>=3.0,<4",
 ]
 
 # Инструменты разработки. Установка: pip install -e ".[dev]"

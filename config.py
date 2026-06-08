@@ -4,6 +4,7 @@ from __future__ import annotations
 import atexit
 import os
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -23,6 +24,18 @@ def ensure_app_dir() -> str:
     """Создаёт каталог приложения (если нужно) и возвращает его путь."""
     os.makedirs(APP_DIR, exist_ok=True)
     return APP_DIR
+
+
+def package_version() -> str:
+    """Версия пакета из метаданных, либо 'dev' при запуске из исходников.
+
+    Единый источник для --version и --self-check, чтобы не дублировать
+    try/except PackageNotFoundError в разных модулях.
+    """
+    try:
+        return version("hhcleaner")
+    except PackageNotFoundError:
+        return "dev"
 
 
 def parse_iso_datetime(value) -> Optional[datetime]:
@@ -58,18 +71,19 @@ USER_AGENT = (
     "Gecko/20100101 Firefox/150.0"
 )
 
-OLD_CHATS_DAYS = int(os.environ.get("HH_OLD_DAYS", 60))
-CHATS_PER_PAGE = int(os.environ.get("HH_CHATS_PER_PAGE", 50))
+# Порог по умолчанию для шага old-chats. Переопределяется флагом --days.
+OLD_CHATS_DAYS = 60
 
-# Паузы между API-запросами (сек): защита от троттлинга. Настраиваются из .env.
-REQUEST_PAUSE = float(os.environ.get("HH_REQUEST_PAUSE", 0.2))  # между однотипными вызовами
-PAGE_PAUSE = float(os.environ.get("HH_PAGE_PAUSE", 0.5))        # между страницами пагинации
-RETRY_BACKOFF = float(os.environ.get("HH_RETRY_BACKOFF", 5))    # пауза перед повтором запроса
+# Размер страницы API и паузы между запросами (сек).
+CHATS_PER_PAGE = 50   # максимум, который отдаёт API чатов
+REQUEST_PAUSE  = 0.2  # между однотипными вызовами (удаление/чтение)
+PAGE_PAUSE     = 0.5  # между страницами пагинации
+RETRY_BACKOFF  = 5    # база экспоненциального backoff перед повтором запроса
 
 _STATE = {"quiet": False, "file_console": None}
 
 console = Console(highlight=False)
-# Ошибки идут в stderr: stdout остаётся чистым для машинного вывода (--output json).
+# Ошибки идут в stderr, чтобы не мешаться с обычным выводом в stdout.
 err_console = Console(stderr=True, highlight=False)
 
 
@@ -83,41 +97,13 @@ def is_quiet() -> bool:
     return _STATE["quiet"]
 
 
-MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 МБ: порог ротации перед открытием файла
-MAX_LOG_BACKUPS = 3             # .1 / .2 / .3 — старейший перезаписывается
-
-
-def _rotate_log(path: str) -> None:
-    """Если лог превысил MAX_LOG_SIZE — ротирует файлы (best-effort).
-
-    path     → path.1 → path.2 → path.3 (старейший удаляется).
-    При следующем открытии path создаётся заново с чистого листа.
-    """
-    try:
-        if not (os.path.isfile(path) and os.path.getsize(path) > MAX_LOG_SIZE):
-            return
-        # Сдвигаем бэкапы от старшего к младшему, чтобы не потерять .1 раньше времени.
-        for n in range(MAX_LOG_BACKUPS, 0, -1):
-            src = f"{path}.{n - 1}" if n > 1 else path
-            dst = f"{path}.{n}"
-            if os.path.isfile(src):
-                if os.path.isfile(dst):
-                    os.remove(dst)
-                os.rename(src, dst)
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass  # ротация некритична — продолжаем дописывать в старый файл
-
-
 def set_log_file(path: str) -> None:
     """Дублирует весь вывод в файл (append). Файл пишется всегда, даже в --quiet.
 
-    При превышении MAX_LOG_SIZE старый лог переименовывается в .1 перед открытием.
-    Прогресс-бары в файл не идут — там нет смысла от анимации.
     """
     if not path:
         return
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    _rotate_log(path)
     # Хендл живёт весь процесс (в него пишут логгеры), поэтому не `with`, а atexit.
     fh = open(path, "a", encoding="utf-8", buffering=1)  # pylint: disable=consider-using-with
     atexit.register(fh.close)  # гарантированно сбрасываем буфер и закрываем при выходе

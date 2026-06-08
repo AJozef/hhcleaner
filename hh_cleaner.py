@@ -21,7 +21,6 @@ hh_cleaner.py — точка входа.
     hhcleaner --quiet --no-input --log           # безлюдный прогон с записью в лог
     hhcleaner --relogin                          # сменить аккаунт (новый вход) + шаги
     hhcleaner --max-delete 20                    # удалить не более 20 элементов за шаг
-    hhcleaner --workers 5                        # параллельное удаление (5 потоков)
     hhcleaner --install-schedule                 # зарегистрировать еженедельный запуск
     hhcleaner --install-schedule --schedule-day FRI --schedule-time 10:00
     hhcleaner --uninstall-schedule               # снять задачу с планировщика
@@ -35,17 +34,10 @@ hh_cleaner.py — точка входа.
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from importlib.metadata import PackageNotFoundError, version
-
-try:
-    import argcomplete as _argcomplete_mod
-except ImportError:
-    _argcomplete_mod = None  # type: ignore[assignment]
 
 from rich.table import Table
 from playwright.sync_api import sync_playwright
@@ -81,6 +73,7 @@ from config import (
     log_ok,
     log_section,
     log_warn,
+    package_version,
     set_log_file,
     set_quiet,
 )
@@ -93,19 +86,15 @@ from scheduler import (
 )
 
 # Версия — единый источник истины в pyproject.toml; читаем из метаданных пакета.
-try:
-    __version__ = version("hhcleaner")
-except PackageNotFoundError:
-    __version__ = "dev"
+__version__ = package_version()
 
 # Все доступные шаги; шаги по умолчанию запускаются, если ничего не указано.
 ALL_STEPS = [
     "read-all",                # пометить прочитанными все непрочитанные чаты
     "negotiations",            # отклики со статусом «отказ»
-    "chats-rejected",          # чаты с отказами через API (быстро)
+    "chats-rejected",          # чаты с отказами: API, при падении — браузер (фолбэк)
     "archived-vacancy",        # чаты по архивным вакансиям, кроме собеседований
     "old-chats",               # чаты старше N дней
-    "chats-rejected-browser",  # чаты с отказами через браузер (резервный метод)
 ]
 DEFAULT_STEPS = ["read-all", "negotiations", "chats-rejected", "archived-vacancy", "old-chats"]
 
@@ -115,7 +104,6 @@ STEP_LABELS = {
     "chats-rejected":         "Чатов-отказов удалено",
     "archived-vacancy":       "Чатов по архивным вакансиям удалено",
     "old-chats":              "Старых чатов удалено",
-    "chats-rejected-browser": "Чатов-отказов удалено (браузер)",
 }
 
 # Коды выхода.
@@ -126,6 +114,32 @@ EXIT_NO_BROWSER   = 4
 
 
 # ──────────────────────────── arg parsing ─────────────────────────────────────
+
+
+def _positive_int(value: str) -> int:
+    """argparse-тип: целое >= 1. Понятная ошибка вместо мусора в логике ниже."""
+    try:
+        n = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"ожидается целое число, получено «{value}»") from exc
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"должно быть >= 1, получено {n}")
+    return n
+
+
+def _iso_date(value: str) -> datetime:
+    """argparse-тип: дата YYYY-MM-DD → tz-aware datetime (UTC).
+
+    Валидируем на этапе разбора аргументов: битая дата у удаляющего инструмента
+    должна остановить запуск с понятной ошибкой, а не молча превратиться в
+    дефолтное окно --days.
+    """
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"ожидается дата в формате YYYY-MM-DD, получено «{value}»"
+        ) from exc
 
 
 def parse_args() -> argparse.Namespace:
@@ -164,11 +178,11 @@ def parse_args() -> argparse.Namespace:
     # ── Параметры очистки ────────────────────────────────────────────────────
     grp_clean = parser.add_argument_group("очистка")
     grp_clean.add_argument(
-        "--days", type=int, default=OLD_CHATS_DAYS,
+        "--days", type=_positive_int, default=OLD_CHATS_DAYS,
         help=f"Порог в днях для шага old-chats (по умолчанию {OLD_CHATS_DAYS}).",
     )
     grp_clean.add_argument(
-        "--since", metavar="DATE",
+        "--since", type=_iso_date, default=None, metavar="DATE",
         help=(
             "Удалять чаты старше этой даты (ISO-формат: YYYY-MM-DD). "
             "Альтернатива --days; при указании имеет приоритет над --days."
@@ -179,15 +193,8 @@ def parse_args() -> argparse.Namespace:
         help="Показать, что будет удалено, без реального удаления.",
     )
     grp_clean.add_argument(
-        "--max-delete", type=int, default=None, metavar="N",
+        "--max-delete", type=_positive_int, default=None, metavar="N",
         help="Страховочный лимит: удалить не более N элементов за шаг.",
-    )
-    grp_clean.add_argument(
-        "--workers", type=int, default=1, metavar="N",
-        help=(
-            "Потоков для параллельного удаления чатов через API "
-            "(1 = последовательно, >=2 = параллельно). По умолчанию 1."
-        ),
     )
 
     # ── Информация / диагностика ─────────────────────────────────────────────
@@ -239,10 +246,7 @@ def parse_args() -> argparse.Namespace:
     grp_sched = parser.add_argument_group("планировщик")
     grp_sched.add_argument(
         "--install-schedule", action="store_true",
-        help=(
-            "Зарегистрировать еженедельный запуск через планировщик ОС "
-            "(Windows Task Scheduler / systemd user timer / launchd plist)."
-        ),
+        help="Зарегистрировать еженедельный запуск через Windows Task Scheduler.",
     )
     grp_sched.add_argument(
         "--uninstall-schedule", action="store_true",
@@ -257,35 +261,12 @@ def parse_args() -> argparse.Namespace:
         help=f"Время запуска для --install-schedule. По умолчанию {SCHEDULE_TIME}.",
     )
 
-    # workers может быть задан через HH_DELETE_WORKERS.
-    env_workers = os.environ.get("HH_DELETE_WORKERS", "").strip()
-    if env_workers:
-        try:
-            parser.set_defaults(workers=int(env_workers))
-        except ValueError:
-            pass
-
-    if _argcomplete_mod is not None:
-        _argcomplete_mod.autocomplete(parser)
-
     args = parser.parse_args()
 
     return args
 
 
 # ──────────────────────────── core steps ─────────────────────────────────────
-
-
-def _parse_since(since_str: str | None) -> datetime | None:
-    """Парсит --since DATE в tz-aware datetime. None если не задано или неверный формат."""
-    if not since_str:
-        return None
-    try:
-        dt = datetime.strptime(since_str.strip(), "%Y-%m-%d")
-        return dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        log_err(f"Неверный формат даты --since: «{since_str}». Ожидается YYYY-MM-DD.")
-        return None
 
 
 def run_steps(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -296,12 +277,10 @@ def run_steps(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     dry_run: bool = False,
     limit: int | None = None,
     cutoff: datetime | None = None,
-    workers: int = 1,
 ) -> dict[str, int]:
     """Выполняет выбранные шаги в фиксированном порядке, возвращает итоги.
 
     cutoff — абсолютная дата среза для old-chats (--since). Если None — вычисляется из days.
-    workers — число потоков для параллельного API-удаления (1 = последовательно).
     """
     results: dict[str, int] = {}
     if "read-all" in steps:
@@ -321,24 +300,24 @@ def run_steps(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             results.update(
                 delete_chats_api_combined(
                     session, api_steps, days,
-                    dry_run=dry_run, limit=limit, cutoff=cutoff, workers=workers,
+                    dry_run=dry_run, limit=limit, cutoff=cutoff,
                 )
             )
         except ChatAPIError as e:
             log_warn(f"Chatik API недоступен ({e}) — использую браузерный резерв.")
             if "chats-rejected" in api_steps:
-                results["chats-rejected"] = delete_rejected_chats(context, dry_run=dry_run)
+                results["chats-rejected"] = delete_rejected_chats(
+                    context, dry_run=dry_run, limit=limit
+                )
             if "archived-vacancy" in api_steps:
                 results["archived-vacancy"] = delete_archived_vacancy_chats_browser(
-                    context, dry_run=dry_run
+                    context, dry_run=dry_run, limit=limit
                 )
             if "old-chats" in api_steps:
                 results["old-chats"] = delete_old_chats_browser(
-                    context, days=days, dry_run=dry_run, cutoff=cutoff
+                    context, days=days, dry_run=dry_run, cutoff=cutoff, limit=limit
                 )
 
-    if "chats-rejected-browser" in steps:
-        results["chats-rejected-browser"] = delete_rejected_chats(context, dry_run=dry_run)
     return results
 
 
@@ -470,8 +449,7 @@ def main() -> int:
     if args.uninstall_schedule:
         return uninstall_schedule()
 
-    # ── Парсим --since ────────────────────────────────────────────────────────
-    cutoff: datetime | None = _parse_since(args.since) if hasattr(args, "since") else None
+    cutoff: datetime | None = args.since
 
     try:
         with sync_playwright() as p:
@@ -557,14 +535,14 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         return EXIT_NEED_LOGIN
 
     context = _prepare_context(p, args.relogin, args.headed)
-    session = open_session(context, workers=args.workers)
+    session = open_session(context)
     status = check_session(session)
     log(f"Проверка: {status.message}")
 
     if not status.ok and auth.has_login_credentials():
         log_warn("Сессия не работает — пробую тихий перелогин из HH_EMAIL/HH_PASSWORD.")
         if auth.headless_login(context):
-            session = open_session(context, workers=args.workers)
+            session = open_session(context)
             status = check_session(session)
             log(f"После тихого перелогина: {status.message}")
         else:
@@ -582,7 +560,7 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         log_warn("Сессия не работает — открываю окно входа.")
         context.close()
         context = auth.interactive_login(auth.launch_context(p, headless=False))
-        session = open_session(context, workers=args.workers)
+        session = open_session(context)
         status = check_session(session)
         log(f"Проверка: {status.message}")
         if not status.ok:
@@ -594,8 +572,6 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
     log(f"Шаги: {', '.join(steps)}")
     if args.dry_run:
         log_warn("[dry-run] Режим просмотра — ничего удалено не будет.")
-    if args.workers > 1:
-        log(f"Параллельное удаление: {args.workers} потока(ов).")
 
     start = time.monotonic()
     results = run_steps(
@@ -603,7 +579,6 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         dry_run=args.dry_run,
         limit=args.max_delete,
         cutoff=cutoff,
-        workers=args.workers,
     )
     elapsed = time.monotonic() - start
 

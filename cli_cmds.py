@@ -8,28 +8,19 @@ from __future__ import annotations
 
 import os
 import sys
-from importlib.metadata import PackageNotFoundError, version
 
 from playwright.sync_api import sync_playwright
 
 import auth
 from config import (
     APP_DIR, DEFAULT_LOG_FILE, USER_DATA_DIR, console,
-    log, log_err, log_ok, log_section, log_warn,
+    log, log_err, log_ok, log_section, log_warn, package_version,
 )
 
 # Код выхода «успех» — дублируем локально, чтобы не создавать цикл с hh_cleaner.
 EXIT_OK = 0
 
-try:
-    _PKG_VERSION: str = version("hhcleaner")
-except PackageNotFoundError:
-    _PKG_VERSION = "dev"
-
-try:
-    import argcomplete as _argcomplete_mod
-except ImportError:
-    _argcomplete_mod = None  # type: ignore[assignment]
+_PKG_VERSION: str = package_version()
 
 
 # ──────────────────────────── browser helper ─────────────────────────────────
@@ -111,11 +102,6 @@ def self_check() -> int:
     # Пакет
     _chk(f"hhcleaner {_PKG_VERSION}", _PKG_VERSION != "dev",
          "запуск из исходников (pip install -e . не выполнен)" if _PKG_VERSION == "dev" else "")
-
-    # argcomplete
-    _ac_ok = _argcomplete_mod is not None
-    _chk("argcomplete (tab-completion)", _ac_ok,
-         "pip install argcomplete" if not _ac_ok else "")
 
     # Playwright + Chromium
     try:

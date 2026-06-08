@@ -206,11 +206,11 @@ def _safe_query(page, sel: str) -> bool:
 # ──────────────────────────── публичные функции ──────────────────────────────
 
 
-def delete_rejected_chats(context, dry_run: bool = False) -> int:
+def delete_rejected_chats(context, dry_run: bool = False, limit: int | None = None) -> int:
     """Резервный метод: удаляет чаты с отказами через браузер.
 
     Многоходовой: каждый проход заново прокручивает список, пока отказов не
-    останется.
+    останется. limit — страховочный лимит на общее число удалений (None = без).
     """
     log_section("Удаление чатов с отказами (браузер)")
     page = context.new_page()
@@ -227,6 +227,13 @@ def delete_rejected_chats(context, dry_run: bool = False) -> int:
         if not targets:
             log_ok("Чатов с отказами больше нет.")
             break
+
+        if limit is not None:
+            remaining = limit - total_deleted
+            if remaining <= 0:
+                log_warn(f"Достигнут лимит --max-delete ({limit}) — останавливаюсь.")
+                break
+            targets = targets[:remaining]
 
         if dry_run:
             log(f"  [dry-run] Было бы удалено: {len(targets)}")
@@ -252,10 +259,12 @@ def delete_old_chats_browser(
     days: int = OLD_CHATS_DAYS,
     dry_run: bool = False,
     cutoff: Optional[datetime] = None,
+    limit: int | None = None,
 ) -> int:
     """Резервный метод: удаляет чаты старше N дней (или старше cutoff) через браузер.
 
     cutoff — абсолютная дата среза (из --since). Приоритет над days.
+    limit — страховочный лимит на число удалений (None = без ограничения).
     Дату читает из <time datetime="..."> в списке чатов (один прокрут).
     Чат без определённой даты пропускается.
     """
@@ -284,6 +293,9 @@ def delete_old_chats_browser(
     if skipped:
         log_warn(f"Пропущено (дата не определена в DOM): {skipped}")
 
+    if limit is not None:
+        old_items = old_items[:limit]
+
     if dry_run:
         log(f"  [dry-run] Было бы удалено: {len(old_items)}")
         page.close()
@@ -298,9 +310,12 @@ def delete_old_chats_browser(
     return deleted
 
 
-def delete_archived_vacancy_chats_browser(context, dry_run: bool = False) -> int:
+def delete_archived_vacancy_chats_browser(
+    context, dry_run: bool = False, limit: int | None = None
+) -> int:
     """Резервный метод: удаляет чаты по архивным вакансиям через браузер.
 
+    limit — страховочный лимит на число удалений (None = без ограничения).
     O(n) по числу чатов — медленнее других методов.
     """
     log_section("Удаление чатов по архивным вакансиям (браузер-резерв)")
@@ -333,6 +348,8 @@ def delete_archived_vacancy_chats_browser(context, dry_run: bool = False) -> int
             to_leave.append(item)
 
     log(f"Архивных вакансий найдено: {len(to_leave)}")
+    if limit is not None:
+        to_leave = to_leave[:limit]
     if dry_run:
         log(f"  [dry-run] Было бы удалено: {len(to_leave)}")
         page.close()
