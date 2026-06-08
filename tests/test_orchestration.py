@@ -47,6 +47,15 @@ class TestRunSteps:
         mocked_steps["delete_rejected_negotiations"].assert_not_called()
         mocked_steps["delete_chats_api_combined"].assert_not_called()
 
+    def test_read_all_api_error_does_not_crash(self, mocked_steps):
+        # read-all ходит только через API и не имеет браузерного фолбэка:
+        # при ChatAPIError прогон не валится, шаг фиксируется как 0.
+        ctx, _ = _make_context()
+        session = MagicMock()
+        mocked_steps["mark_all_chats_read"].side_effect = ChatAPIError("401")
+        results = hh_cleaner.run_steps(ctx, session, ["read-all"], days=30)
+        assert results == {"read-all": 0}
+
     def test_negotiations_opens_and_closes_own_page(self, mocked_steps):
         ctx, page = _make_context()
         session = MagicMock()

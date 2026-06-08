@@ -80,6 +80,15 @@ REQUEST_PAUSE  = 0.2  # между однотипными вызовами (уд
 PAGE_PAUSE     = 0.5  # между страницами пагинации
 RETRY_BACKOFF  = 5    # база экспоненциального backoff перед повтором запроса
 
+# Коды выхода процесса. Живут здесь — в общем бездепендном модуле, — чтобы
+# hh_cleaner и cli_cmds не держали собственные копии (раньше cli_cmds заводил
+# локальный EXIT_OK именно ради того, чтобы не импортировать hh_cleaner и не
+# создать цикл).
+EXIT_OK           = 0  # успех
+EXIT_LOGIN_FAILED = 2  # вход не удался
+EXIT_NEED_LOGIN   = 3  # нужен ручной вход (--login-only)
+EXIT_NO_BROWSER   = 4  # не установлен браузер Playwright (--setup)
+
 _STATE = {"quiet": False, "file_console": None}
 
 console = Console(highlight=False)

@@ -24,6 +24,7 @@ class TestDefaults:
         assert args.quiet is False
         assert args.headed is False
         assert args.since is None
+        assert args.yes is False
 
 
 class TestFlags:
@@ -42,6 +43,10 @@ class TestFlags:
     def test_no_input_flag(self, monkeypatch):
         args = _parse(monkeypatch, ["--no-input"])
         assert args.no_input is True
+
+    def test_yes_flag(self, monkeypatch):
+        args = _parse(monkeypatch, ["--yes"])
+        assert args.yes is True
 
     def test_headed_flag(self, monkeypatch):
         args = _parse(monkeypatch, ["--headed"])

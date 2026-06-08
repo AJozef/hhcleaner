@@ -54,3 +54,9 @@ class TestIsoDate:
         # превращает в сообщение об ошибке + exit 2.
         with pytest.raises(argparse.ArgumentTypeError):
             _iso_date(bad)
+
+    def test_future_date_rejected(self):
+        # Дата из будущего у удаляющего шага означала бы «старше будущего» =
+        # почти весь аккаунт. Должна отклоняться на этапе разбора аргументов.
+        with pytest.raises(argparse.ArgumentTypeError):
+            _iso_date("2999-12-31")

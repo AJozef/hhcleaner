@@ -13,12 +13,9 @@ from playwright.sync_api import sync_playwright
 
 import auth
 from config import (
-    APP_DIR, DEFAULT_LOG_FILE, USER_DATA_DIR, console,
+    APP_DIR, DEFAULT_LOG_FILE, EXIT_OK, USER_DATA_DIR, console,
     log, log_err, log_ok, log_section, log_warn, package_version,
 )
-
-# Код выхода «успех» — дублируем локально, чтобы не создавать цикл с hh_cleaner.
-EXIT_OK = 0
 
 _PKG_VERSION: str = package_version()
 
@@ -53,18 +50,25 @@ def show_log(n: int, log_path: str | None = None) -> int:
     return EXIT_OK
 
 
-def clear_log(log_path: str | None = None) -> int:
-    """Очищает лог-файл (после подтверждения)."""
+def clear_log(log_path: str | None = None, assume_yes: bool = False) -> int:
+    """Очищает лог-файл (после подтверждения).
+
+    assume_yes — пропустить интерактивный вопрос (флаг --yes для безлюдного
+    режима).
+    """
     path = log_path or DEFAULT_LOG_FILE
     if not os.path.isfile(path):
         log(f"Лог-файл не существует: {path}")
         return EXIT_OK
-    size_kb = os.path.getsize(path) // 1024
-    log_warn(f"Очистить лог {path} ({size_kb} КБ)?")
-    try:
-        answer = input("[y/N]: ").strip().lower()
-    except EOFError:
-        answer = ""
+    if assume_yes:
+        answer = "y"
+    else:
+        size_kb = os.path.getsize(path) // 1024
+        log_warn(f"Очистить лог {path} ({size_kb} КБ)?")
+        try:
+            answer = input("[y/N]: ").strip().lower()
+        except EOFError:
+            answer = ""
     if answer not in ("y", "yes", "д", "да"):
         log("Отменено.")
         return EXIT_OK
