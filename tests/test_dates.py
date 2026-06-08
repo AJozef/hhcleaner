@@ -1,12 +1,13 @@
-"""Тесты разбора дат: parse_iso_datetime и _parse_since."""
+"""Тесты разбора дат: parse_iso_datetime и argparse-тип _iso_date."""
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 
 import pytest
 
 from config import parse_iso_datetime
-from hh_cleaner import _parse_since
+from hh_cleaner import _iso_date
 
 
 class TestParseIsoDatetime:
@@ -38,19 +39,18 @@ class TestParseIsoDatetime:
         assert dt == datetime(2025, 6, 1, 0, 0, tzinfo=timezone.utc)
 
 
-class TestParseSince:
-    def test_none_returns_none(self):
-        assert _parse_since(None) is None
-        assert _parse_since("") is None
-
+class TestIsoDate:
     def test_valid_date(self):
-        dt = _parse_since("2025-01-15")
+        dt = _iso_date("2025-01-15")
         assert dt == datetime(2025, 1, 15, 0, 0, tzinfo=timezone.utc)
 
     def test_whitespace_trimmed(self):
-        dt = _parse_since("  2025-01-15  ")
+        dt = _iso_date("  2025-01-15  ")
         assert dt == datetime(2025, 1, 15, 0, 0, tzinfo=timezone.utc)
 
-    @pytest.mark.parametrize("bad", ["2025/01/15", "15-01-2025", "хрень", "2025-13-01"])
-    def test_invalid_format_returns_none(self, bad):
-        assert _parse_since(bad) is None
+    @pytest.mark.parametrize("bad", ["2025/01/15", "15-01-2025", "хрень", "2025-13-01", ""])
+    def test_invalid_format_raises(self, bad):
+        # argparse-тип сигналит ошибку через ArgumentTypeError — её argparse
+        # превращает в сообщение об ошибке + exit 2.
+        with pytest.raises(argparse.ArgumentTypeError):
+            _iso_date(bad)

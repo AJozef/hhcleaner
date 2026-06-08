@@ -33,7 +33,7 @@ hhcleaner --install-schedule         # зарегистрировать ежен
 hhcleaner --help                     # все опции
 ```
 
-Доступные шаги: `read-all`, `negotiations`, `chats-rejected`, `archived-vacancy`, `old-chats`, `chats-rejected-browser`.
+Доступные шаги: `read-all`, `negotiations`, `chats-rejected`, `archived-vacancy`, `old-chats`. Шаг `chats-rejected` ходит через API, а при его отказе (401/403) автоматически переключается на браузерный метод.
 
 ## .env (опционально)
 

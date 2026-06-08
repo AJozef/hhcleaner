@@ -1,7 +1,6 @@
-"""Тесты check_session, has_login_credentials, _configure_pool, retry — без сети."""
+"""Тесты check_session, has_login_credentials, retry — без сети."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import requests
@@ -10,7 +9,6 @@ import auth
 import chats_api
 from chats_api import (
     SessionStatus,
-    _configure_pool,
     _parse_retry_after,
     _request_with_retry,
     check_session,
@@ -52,31 +50,6 @@ class TestHasLoginCredentials:
         assert auth.has_login_credentials() is False
 
 
-class TestConfigurePool:
-    def test_default_adapter_when_workers_below_threshold(self):
-        session = requests.Session()
-        original = session.adapters["https://"]
-        _configure_pool(session, workers=5)
-        # При workers <= 10 ничего не меняем — дефолтный адаптер на месте.
-        assert session.adapters["https://"] is original
-
-    def test_at_threshold_no_change(self):
-        session = requests.Session()
-        original = session.adapters["https://"]
-        _configure_pool(session, workers=10)
-        assert session.adapters["https://"] is original
-
-    def test_new_adapter_when_workers_above_threshold(self):
-        session = requests.Session()
-        original = session.adapters["https://"]
-        _configure_pool(session, workers=20)
-        # При workers > 10 монтируем свой адаптер с расширенным пулом.
-        adapter = session.adapters["https://"]
-        assert adapter is not original
-        # Размер пула отдан под все потоки.
-        assert adapter._pool_maxsize == 20
-
-
 class TestParseRetryAfter:
     def test_none_and_empty(self):
         assert _parse_retry_after(None) is None
@@ -97,21 +70,10 @@ class TestParseRetryAfter:
         assert _parse_retry_after("-5") == 0.0
 
     def test_invalid_string(self):
+        # Любая неразбираемая строка (включая HTTP-date) → None,
+        # и caller уходит в обычный backoff.
         assert _parse_retry_after("not a number") is None
-
-    def test_http_date_in_future(self):
-        future = datetime.now(timezone.utc) + timedelta(seconds=60)
-        # Формат RFC 7231: "Wed, 21 Oct 2025 07:28:00 GMT"
-        header = future.strftime("%a, %d %b %Y %H:%M:%S GMT")
-        result = _parse_retry_after(header)
-        assert result is not None
-        # Примерно 60 секунд (с запасом на время прогона теста).
-        assert 55 <= result <= 60
-
-    def test_http_date_in_past_clamped_to_zero(self):
-        past = datetime.now(timezone.utc) - timedelta(seconds=60)
-        header = past.strftime("%a, %d %b %Y %H:%M:%S GMT")
-        assert _parse_retry_after(header) == 0.0
+        assert _parse_retry_after("Wed, 21 Oct 2025 07:28:00 GMT") is None
 
 
 class TestRequestWithRetryOn429:

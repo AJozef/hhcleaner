@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from typing import Callable, NamedTuple
 
 import requests
-from requests.adapters import HTTPAdapter
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.progress import track as _track
 
 from config import (
@@ -39,31 +36,8 @@ class ChatAPIError(Exception):
 # ──────────────────────────── session ────────────────────────────────────────
 
 
-_DEFAULT_POOL_MAXSIZE = 10  # дефолт urllib3 — расширяем при workers > 10
-
-
-def _configure_pool(session: requests.Session, workers: int) -> None:
-    """Расширяет HTTPS-пул соединений до числа воркеров.
-
-    Дефолтный pool_maxsize у urllib3 — 10. Если workers больше, лишние
-    потоки либо ждут свободного слота, либо переоткрывают сокеты с
-    варнингом «Connection pool is full, discarding connection» — параллелизм
-    оборачивается лишней работой. При workers <= 10 ничего не трогаем.
-    """
-    if workers <= _DEFAULT_POOL_MAXSIZE:
-        return
-    adapter = HTTPAdapter(
-        pool_connections=_DEFAULT_POOL_MAXSIZE, pool_maxsize=workers
-    )
-    session.mount("https://", adapter)
-
-
-def open_session(context, workers: int = 1) -> requests.Session | None:
+def open_session(context) -> requests.Session | None:
     """Открывает chatik, забирает куки и создаёт requests-сессию (или None).
-
-    workers — число параллельных потоков, которые будут пользоваться сессией
-    (1 = последовательно). Нужно знать заранее, чтобы корректно размерить
-    connection pool urllib3.
 
     Страницу НЕ закрываем намеренно: в persistent context закрытие последней
     страницы автоматически закрывает весь контекст, и последующие new_page()
@@ -91,7 +65,6 @@ def open_session(context, workers: int = 1) -> requests.Session | None:
         return None
 
     session = requests.Session()
-    _configure_pool(session, workers)
     for k, v in {
         "User-Agent":        USER_AGENT,
         "Accept":            "application/json",
@@ -114,29 +87,15 @@ def open_session(context, workers: int = 1) -> requests.Session | None:
 def _parse_retry_after(value: str | None) -> float | None:
     """Парсит заголовок Retry-After в секунды (или None, если не разобрался).
 
-    RFC 7231 допускает два формата:
-    1) число секунд («120»);
-    2) HTTP-date («Wed, 21 Oct 2025 07:28:00 GMT») — высчитываем дельту от now().
-
-    Отрицательные значения клампим к 0 (просьба «уже можно»).
+    Поддерживаем числовой формат («120», «2.5»); отрицательные клампим к 0
+    («уже можно»).
     """
     if not value:
         return None
-    text = value.strip()
     try:
-        return max(0.0, float(text))
+        return max(0.0, float(value.strip()))
     except ValueError:
-        pass
-    try:
-        dt = parsedate_to_datetime(text)
-    except (TypeError, ValueError):
         return None
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    delta = (dt - datetime.now(timezone.utc)).total_seconds()
-    return max(0.0, delta)
 
 
 def _request_with_retry(
@@ -242,7 +201,7 @@ def _get_all_chats_pages(session: requests.Session):
 
 
 def _leave_one(session: requests.Session, chat_id: str) -> bool:
-    """Покидает один чат. True при успехе. Потокобезопасен."""
+    """Покидает один чат. True при успехе."""
     resp = _request_with_retry(
         session, "POST", LEAVE_ENDPOINT, what="leave", json={"chatId": chat_id}
     )
@@ -254,12 +213,10 @@ def _leave_chats(
     chat_ids: list[str],
     dry_run: bool = False,
     limit: int | None = None,
-    workers: int = 1,
 ) -> int:
-    """Покидает список чатов по ID, возвращает количество удалённых.
+    """Покидает список чатов по ID последовательно, возвращает количество удалённых.
 
-    workers > 1 — параллельное удаление через ThreadPoolExecutor.
-    Прогресс-бар: в параллельном режиме используется BarColumn с процентом.
+    Между запросами держим REQUEST_PAUSE — вежливый темп против троттлинга API.
     """
     if limit is not None:
         chat_ids = chat_ids[:limit]
@@ -272,41 +229,14 @@ def _leave_chats(
     deleted = 0
     errors  = 0
 
-    if workers > 1:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-            console=console,
-            disable=is_quiet(),
-            transient=True,
-        ) as progress:
-            task = progress.add_task("  Удаляю чаты  ", total=len(chat_ids))
-            # Сессия шарится между потоками. Это безопасно здесь: заголовки
-            # выставлены до старта пула и только читаются, пул соединений
-            # urllib3 потокобезопасен, а cookiejar обновляется под локом.
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = {
-                    executor.submit(_leave_one, session, cid): cid
-                    for cid in chat_ids
-                }
-                for future in as_completed(futures):
-                    if future.result():
-                        deleted += 1
-                    else:
-                        errors += 1
-                    progress.advance(task)
-    else:
-        for chat_id in _track(
-            chat_ids, description="  Удаляю чаты  ", disable=is_quiet(), transient=True
-        ):
-            if _leave_one(session, chat_id):
-                deleted += 1
-            else:
-                errors += 1
-            time.sleep(REQUEST_PAUSE)
+    for chat_id in _track(
+        chat_ids, description="  Удаляю чаты  ", disable=is_quiet(), transient=True
+    ):
+        if _leave_one(session, chat_id):
+            deleted += 1
+        else:
+            errors += 1
+        time.sleep(REQUEST_PAUSE)
 
     msg = f"  Удалено: {deleted}"
     if errors:
@@ -526,13 +456,11 @@ def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-po
     dry_run: bool = False,
     limit: int | None = None,
     cutoff: datetime | None = None,
-    workers: int = 1,
 ) -> dict[str, int]:
     """Удаляет чаты нескольких типов за один проход по пагинации.
 
     cutoff — абсолютная дата среза для old-chats (из --since). Если None —
     вычисляется из days. Приоритет: cutoff > days.
-    workers — потоков для параллельного удаления (1 = последовательно).
     """
     active = [s for s in _API_STEPS if s in steps]
     if not active:
@@ -563,10 +491,11 @@ def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-po
     results: dict[str, int] = {}
     for step in active:
         ids = collected.get(step, [])
-        label = _STEP_LABELS.get(step, f"Чатов старше {days} дней")
+        # old-chats: лейбл из фактического порога (cutoff/--days).
+        label = _STEP_LABELS.get(step, f"Чатов старше {effective_cutoff:%Y-%m-%d}")
         log(f"{label}: {len(ids)}")
         results[step] = _leave_chats(
-            session, ids, dry_run=dry_run, limit=limit, workers=workers
+            session, ids, dry_run=dry_run, limit=limit
         )
 
     return results
