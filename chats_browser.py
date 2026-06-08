@@ -15,6 +15,23 @@ from typing import Optional
 from config import (
     CHATIK_URL, OLD_CHATS_DAYS, log, log_ok, log_section, log_warn, parse_iso_datetime,
 )
+from ui_selectors import (
+    ARCHIVED_VACANCY_MARKERS,
+    ARCHIVED_VACANCY_TEXT_HOSTS,
+    ARCHIVED_VACANCY_TEXTS,
+    CHAT_COMPANY,
+    CHAT_LEAVE,
+    CHAT_LINK,
+    CHAT_LIST_CONTAINER,
+    CHAT_MENU,
+    CHAT_REJECTED_MARK,
+    CHAT_REJECTED_TEXT,
+    CHAT_TIME_FALLBACKS,
+    CHAT_TIME_PRIMARY,
+    CHAT_TITLE,
+    CHATIK_LAYOUT,
+    INTERVIEW_MARKERS,
+)
 
 _CHATIK_BASE = "https://chatik.hh.ru"
 
@@ -22,14 +39,6 @@ _CHATIK_BASE = "https://chatik.hh.ru"
 _MAX_ROUNDS = 6
 # Ограничение скролла: защита на случай очень большого аккаунта.
 _MAX_SCROLL_ITEMS = 2000
-
-# Текстовые маркеры архивной вакансии в области заголовка чата.
-_ARCHIVED_TEXTS = (
-    "Вакансия закрыта", "вакансия закрыта",
-    "Вакансия удалена", "вакансия удалена",
-    "Вакансия не существует",
-    "Вакансия снята",
-)
 
 
 # ──────────────────────────── приватные хелперы ──────────────────────────────
@@ -39,7 +48,7 @@ def _open_chatik(page) -> bool:
     """Переходит на chatik и ждёт layout. True при успехе."""
     try:
         page.goto(CHATIK_URL, wait_until="domcontentloaded", timeout=20000)
-        page.wait_for_selector("[data-qa='chatik-layout']", timeout=15000)
+        page.wait_for_selector(CHATIK_LAYOUT, timeout=15000)
         return True
     except Exception as e:  # pylint: disable=broad-exception-caught
         log(f"  ! chatik не открылся: {e}")
@@ -56,8 +65,8 @@ def _scroll_collect_all(page) -> dict[str, dict]:
     info_dict: href, company, title, is_rejected, date_iso (str | None).
     """
     page.evaluate(
-        "() => { const s = document.querySelector('[class*=\"chats--\"]');"
-        " if (s) s.scrollTop = 0; }"
+        "(sel) => { const s = document.querySelector(sel); if (s) s.scrollTop = 0; }",
+        CHAT_LIST_CONTAINER,
     )
     time.sleep(1.5)
 
@@ -66,26 +75,27 @@ def _scroll_collect_all(page) -> dict[str, dict]:
     no_growth = 0
 
     while len(collected) < _MAX_SCROLL_ITEMS:
-        for chat in page.query_selector_all("a[data-qa^='chatik-open-chat-']"):
+        for chat in page.query_selector_all(CHAT_LINK):
             href = chat.get_attribute("href")
             if not href or href in collected:
                 continue
             try:
-                red_el   = chat.query_selector("[class*='last-message-color_red']")
-                title_el = chat.query_selector("[class*='title--']")
-                cmp_el   = chat.query_selector("[class*='subtitle--']")
+                red_el   = chat.query_selector(CHAT_REJECTED_MARK)
+                title_el = chat.query_selector(CHAT_TITLE)
+                cmp_el   = chat.query_selector(CHAT_COMPANY)
+                is_rejected = bool(red_el) and CHAT_REJECTED_TEXT in (red_el.inner_text() or "")
                 collected[href] = {
                     "href":        href,
                     "company":     cmp_el.inner_text().strip() if cmp_el else "",
                     "title":       title_el.inner_text().strip() if title_el else "",
-                    "is_rejected": bool(red_el) and "Отказ" in (red_el.inner_text() or ""),
+                    "is_rejected": is_rejected,
                     "date_iso":    _extract_date_iso(chat),
                 }
             except Exception:  # pylint: disable=broad-exception-caught
                 continue
 
-        result = page.evaluate("""() => {
-            const s = document.querySelector('[class*="chats--"]');
+        result = page.evaluate("""(sel) => {
+            const s = document.querySelector(sel);
             if (!s) return null;
             s.scrollTop += s.clientHeight * 0.5;
             return {
@@ -93,7 +103,7 @@ def _scroll_collect_all(page) -> dict[str, dict]:
                 scrollHeight: s.scrollHeight,
                 clientHeight: s.clientHeight
             };
-        }""")
+        }""", CHAT_LIST_CONTAINER)
         if not result:
             break
         at_bottom = (
@@ -120,15 +130,12 @@ def _extract_date_iso(chat_el) -> Optional[str]:
     Без datetime-атрибута возвращаем None — дата не определена, чат не удаляем.
     """
     try:
-        el = chat_el.query_selector("time[datetime]")
+        el = chat_el.query_selector(CHAT_TIME_PRIMARY)
         if el:
             return el.get_attribute("datetime")
     except Exception:  # pylint: disable=broad-exception-caught
         pass
-    for sel in (
-        "[data-qa*='date']", "[data-qa*='time']",
-        "[class*='date--']", "[class*='time--']",
-    ):
+    for sel in CHAT_TIME_FALLBACKS:
         try:
             el = chat_el.query_selector(sel)
             if el:
@@ -142,12 +149,12 @@ def _extract_date_iso(chat_el) -> Optional[str]:
 
 def _leave_from_current_page(page, company: str, title: str) -> bool:
     """Покидает чат, предполагая, что его страница уже открыта. True при успехе."""
-    menu = page.query_selector("[data-qa='chatik-chat-menu']")
+    menu = page.query_selector(CHAT_MENU)
     if not menu:
         return False
     menu.click()
     time.sleep(0.7)
-    leave = page.query_selector("[data-qa='chatik-chat-leave-chat']")
+    leave = page.query_selector(CHAT_LEAVE)
     if not leave:
         return False
     leave.click()
@@ -169,27 +176,19 @@ def _leave_chat(page, href: str, company: str, title: str) -> bool:
 
 def _is_archived_in_current_page(page) -> bool:
     """Проверяет признаки архивной вакансии на уже открытой странице чата."""
-    for sel in (
-        "[data-qa*='vacancy-archived']", "[data-qa*='vacancy-deleted']",
-        "[class*='vacancy-archived']",   "[class*='vacancy-deleted']",
-        "[class*='archived-vacancy']",
-    ):
+    for sel in ARCHIVED_VACANCY_MARKERS:
         try:
             if page.query_selector(sel):
                 return True
         except Exception:  # pylint: disable=broad-exception-caught
             continue
 
-    for sel in (
-        "[data-qa*='vacancy']", "[class*='vacancy-info']",
-        "[data-qa*='chat-header']", "[class*='chat-header']",
-        "[class*='vacancy']",
-    ):
+    for sel in ARCHIVED_VACANCY_TEXT_HOSTS:
         try:
             el = page.query_selector(sel)
             if el:
                 text = el.inner_text() or ""
-                if any(m in text for m in _ARCHIVED_TEXTS):
+                if any(m in text for m in ARCHIVED_VACANCY_TEXTS):
                     return True
         except Exception:  # pylint: disable=broad-exception-caught
             continue
@@ -325,12 +324,7 @@ def delete_archived_vacancy_chats_browser(context, dry_run: bool = False) -> int
             continue
         time.sleep(1.0)
 
-        is_interview = any(
-            _safe_query(page, sel) for sel in (
-                "[data-qa*='interview']", "[class*='interview']",
-                "[data-qa*='INTERVIEW']", "[class*='applicant-state_interview']",
-            )
-        )
+        is_interview = any(_safe_query(page, sel) for sel in INTERVIEW_MARKERS)
         if is_interview:
             log("    Пропущено (собеседование).")
             continue

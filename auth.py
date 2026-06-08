@@ -22,6 +22,12 @@ from config import (
     LOGIN_URL, USER_DATA_DIR, ensure_app_dir,
     log, log_ok, log_section, log_warn,
 )
+from ui_selectors import (
+    LOGIN_APPLICANT_CARD,
+    LOGIN_PASSWORD_INPUT,
+    LOGIN_SUBMIT_BUTTON,
+    LOGIN_USERNAME_INPUT,
+)
 
 _LOGIN_TIMEOUT_MS = 5 * 60 * 1000  # 5 минут на ручной вход
 _HEADLESS_LOGIN_TIMEOUT_MS = 15 * 1000  # 15 секунд на тихий перелогин
@@ -73,15 +79,13 @@ def _autofill_login(page, email: str, password: str) -> None:
 
     try:
         inp = page.wait_for_selector(
-            "[data-qa='login-input-username'], input[name='login'], input[type='email']",
+            LOGIN_USERNAME_INPUT,
             timeout=5000,
             state="visible",
         )
         if inp:
             inp.fill(email)
-            btn = page.query_selector(
-                "[data-qa='account-login-submit'], button[type='submit']"
-            )
+            btn = page.query_selector(LOGIN_SUBMIT_BUTTON)
             if btn:
                 btn.click()
     except Exception:  # pylint: disable=broad-exception-caught
@@ -92,15 +96,13 @@ def _autofill_login(page, email: str, password: str) -> None:
 
     try:
         inp = page.wait_for_selector(
-            "[data-qa='login-input-password'], input[type='password']",
+            LOGIN_PASSWORD_INPUT,
             timeout=5000,
             state="visible",
         )
         if inp:
             inp.fill(password)
-            btn = page.query_selector(
-                "[data-qa='account-login-submit'], button[type='submit']"
-            )
+            btn = page.query_selector(LOGIN_SUBMIT_BUTTON)
             if btn:
                 btn.click()
     except Exception:  # pylint: disable=broad-exception-caught
@@ -136,7 +138,7 @@ def headless_login(context: BrowserContext) -> bool:
         return False
 
     try:
-        card = page.query_selector("[data-qa*='account-type-card-APPLICANT']")
+        card = page.query_selector(LOGIN_APPLICANT_CARD)
         if card:
             card.click()
     except Exception:  # pylint: disable=broad-exception-caught
@@ -161,7 +163,7 @@ def interactive_login(context: BrowserContext) -> BrowserContext:
     page.goto(LOGIN_URL)
 
     try:
-        card = page.query_selector("[data-qa*='account-type-card-APPLICANT']")
+        card = page.query_selector(LOGIN_APPLICANT_CARD)
         if card:
             card.click()
     except Exception:  # pylint: disable=broad-exception-caught

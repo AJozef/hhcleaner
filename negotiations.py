@@ -4,27 +4,24 @@ from __future__ import annotations
 import re
 
 from config import NEGOTIATIONS_URL, log, log_ok, log_section, log_warn
-
-# Контейнеры модального окна подтверждения.
-_MODAL_SELECTOR = (
-    "[role='dialog'], [data-qa*='modal'], [class*='magritte-modal'], .bloko-modal"
+from ui_selectors import (
+    DELETE_CONFIRM_BUTTONS,
+    MODAL_ANY_BUTTON,
+    MODAL_CONTAINER,
+    NEGOTIATIONS_BATCH_REMOVE,
+    NEGOTIATIONS_CHECKBOX,
+    NEGOTIATIONS_DISCARD,
+    NEGOTIATIONS_ITEM,
+    NEGOTIATIONS_ITEM_LINK,
+    NEGOTIATIONS_LIST,
 )
-
-# Известные data-qa кнопки подтверждения удаления (приоритетнее текста).
-_CONFIRM_QA = [
-    "[data-qa='magritte_modal_buttons_delete']",
-    "[data-qa='abandon-negotiation-submit']",
-    "[data-qa='delete-confirmation-submit']",
-    "[data-qa='negotiations-batch-remove-confirm']",
-    "[data-qa='negotiations-delete-submit']",
-]
 
 
 def _dump_dialog_buttons(page) -> None:
     """Логирует видимые кнопки окна (data-qa и текст) для отладки селектора."""
     log_warn("Видимые кнопки (data-qa | текст) — пришлите их, чтобы уточнить селектор:")
-    scope = page.query_selector(_MODAL_SELECTOR) or page
-    for btn in scope.query_selector_all("button, [role='button'], a[data-qa]"):
+    scope = page.query_selector(MODAL_CONTAINER) or page
+    for btn in scope.query_selector_all(MODAL_ANY_BUTTON):
         try:
             if not btn.is_visible():
                 continue
@@ -38,10 +35,10 @@ def _dump_dialog_buttons(page) -> None:
 def _confirm_deletion(page) -> bool:
     """Находит и нажимает кнопку подтверждения в модальном окне. True при успехе."""
     try:
-        page.wait_for_selector(", ".join(_CONFIRM_QA), timeout=5000, state="visible")
+        page.wait_for_selector(", ".join(DELETE_CONFIRM_BUTTONS), timeout=5000, state="visible")
     except Exception:  # pylint: disable=broad-exception-caught
         pass
-    for sel in _CONFIRM_QA:
+    for sel in DELETE_CONFIRM_BUTTONS:
         btn = page.query_selector(sel)
         if btn and btn.is_visible():
             log(f"  Подтверждаю: {sel}")
@@ -49,11 +46,11 @@ def _confirm_deletion(page) -> bool:
             return True
 
     try:
-        page.wait_for_selector(_MODAL_SELECTOR, timeout=5000, state="visible")
+        page.wait_for_selector(MODAL_CONTAINER, timeout=5000, state="visible")
     except Exception:  # pylint: disable=broad-exception-caught
         return False
 
-    modal = page.locator(_MODAL_SELECTOR)
+    modal = page.locator(MODAL_CONTAINER)
     if modal.count() == 0:
         return False
     scope = modal.last
@@ -80,7 +77,7 @@ def _open_negotiations(page, idx: int) -> bool:
     url = NEGOTIATIONS_URL if idx == 0 else f"{NEGOTIATIONS_URL}?page={idx}"
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        page.wait_for_selector("[data-qa='negotiations-list']", timeout=15000)
+        page.wait_for_selector(NEGOTIATIONS_LIST, timeout=15000)
         return True
     except Exception:  # pylint: disable=broad-exception-caught
         return False
@@ -88,15 +85,15 @@ def _open_negotiations(page, idx: int) -> bool:
 
 def _page_key(page) -> str | None:
     """Отпечаток страницы — href первого отклика (или None, если откликов нет)."""
-    first = page.query_selector("[data-qa='negotiations-item'] a[href]")
+    first = page.query_selector(NEGOTIATIONS_ITEM_LINK)
     return first.get_attribute("href") if first else None
 
 
 def _rejected_items(page) -> list:
     """Список откликов-отказов на текущей странице (по пометке discard)."""
     return [
-        item for item in page.query_selector_all("[data-qa='negotiations-item']")
-        if item.query_selector("[data-qa*='negotiations-item-discard']")
+        item for item in page.query_selector_all(NEGOTIATIONS_ITEM)
+        if item.query_selector(NEGOTIATIONS_DISCARD)
     ]
 
 
@@ -171,7 +168,7 @@ def delete_rejected_negotiations(
 
         checked = 0
         for item in target:
-            checkbox = item.query_selector("input[data-qa='negotiations-item-checkbox']")
+            checkbox = item.query_selector(NEGOTIATIONS_CHECKBOX)
             if checkbox and not checkbox.is_checked():
                 checkbox.check()
                 checked += 1
@@ -180,7 +177,7 @@ def delete_rejected_negotiations(
             log_warn("Отказы найдены, но не удалось отметить чекбоксы — останавливаюсь.")
             break
 
-        delete_btn = page.query_selector("[data-qa='negotiations-batch-remove']")
+        delete_btn = page.query_selector(NEGOTIATIONS_BATCH_REMOVE)
         if not delete_btn:
             log("Не нашёл кнопку 'Удалить выбранное'.")
             break
