@@ -40,7 +40,7 @@ hhcleaner = "hh_cleaner:main"
 py-modules = [
     "hh_cleaner", "auth", "config",
     "chats_api", "chats_browser", "negotiations", "notify",
-    "scheduler", "cli_cmds",
+    "scheduler", "cli_cmds", "ui_selectors",
 ]
 
 # ---------------------------------------------------------------------------
