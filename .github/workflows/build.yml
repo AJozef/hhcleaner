@@ -10,6 +10,10 @@ jobs:
   build:
     name: Build hhcleaner.exe
     runs-on: windows-latest
+    # Нужно, чтобы action-gh-release мог создать релиз и залить .exe:
+    # по умолчанию токен Actions read-only, и шаг релиза падал бы с 403.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
