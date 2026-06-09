@@ -19,7 +19,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from config import (
-    LOGIN_URL, USER_DATA_DIR, ensure_app_dir,
+    BROWSER_CHANNELS, LOGIN_URL, USER_DATA_DIR, ensure_app_dir,
     log, log_ok, log_section, log_warn,
 )
 from ui_selectors import (
@@ -57,15 +57,70 @@ def clear_session() -> None:
         shutil.rmtree(USER_DATA_DIR, ignore_errors=True)
 
 
+# Маркер «запасной встроенный Chromium» (launch без channel) в очереди попыток.
+_BUNDLED = ""
+# Кэш сработавшего варианта на процесс: первый запуск перебирает каналы, дальше
+# сразу берём рабочий — чтобы не платить таймаутом за отсутствующий Edge каждый раз.
+_WORKING_CHANNEL: str | None = None
+
+
+def _persistent_context(playwright, headless: bool, channel: str) -> BrowserContext:
+    """launch_persistent_context для конкретного варианта браузера.
+
+    channel == _BUNDLED — без указания channel (встроенный Chromium Playwright);
+    иначе — системный браузер (msedge/chrome).
+    """
+    kwargs = {} if channel == _BUNDLED else {"channel": channel}
+    return playwright.chromium.launch_persistent_context(
+        USER_DATA_DIR, headless=headless, **kwargs
+    )
+
+
 def launch_context(playwright, headless: bool) -> BrowserContext:
-    """Открывает постоянный контекст браузера из сохранённого профиля.
+    """Открывает постоянный контекст в системном браузере (Edge/Chrome).
+
+    Перебирает BROWSER_CHANNELS, затем встроенный Chromium как запас. Системный
+    браузер не нужно скачивать — на Windows 10/11 Edge есть всегда. Сработавший
+    вариант кэшируется на процесс.
 
     Возвращает BrowserContext (у persistent-контекста нет отдельного Browser —
     закрывать нужно сам контекст: context.close()).
     """
+    global _WORKING_CHANNEL  # pylint: disable=global-statement
     ensure_app_dir()
     os.makedirs(USER_DATA_DIR, exist_ok=True)
-    return playwright.chromium.launch_persistent_context(USER_DATA_DIR, headless=headless)
+
+    order = [_WORKING_CHANNEL] if _WORKING_CHANNEL is not None else [*BROWSER_CHANNELS, _BUNDLED]
+    last_err: Exception | None = None
+    for channel in order:
+        try:
+            ctx = _persistent_context(playwright, headless, channel)
+            _WORKING_CHANNEL = channel
+            return ctx
+        except (PlaywrightError, PlaywrightTimeout) as e:
+            last_err = e
+
+    raise LoginError(
+        "Не удалось запустить браузер. Установите Microsoft Edge или Google Chrome "
+        "(обычно Edge уже есть в Windows 10/11) и попробуйте снова."
+    ) from last_err
+
+
+def detect_browser(playwright) -> str | None:
+    """Какой браузер доступен для входа: 'msedge'/'chrome'/'' (встроенный) или None.
+
+    Пробует кратко запустить НЕпостоянный браузер (без блокировки профиля) —
+    для диагностики (--self-check). Возвращает первый рабочий вариант или None.
+    """
+    for channel in [*BROWSER_CHANNELS, _BUNDLED]:
+        kwargs = {} if channel == _BUNDLED else {"channel": channel}
+        try:
+            browser = playwright.chromium.launch(headless=True, **kwargs)
+            browser.close()
+            return channel
+        except (PlaywrightError, PlaywrightTimeout):
+            continue
+    return None
 
 
 def _autofill_login(page, email: str, password: str) -> None:

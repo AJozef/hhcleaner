@@ -19,17 +19,8 @@ from config import (
 
 _PKG_VERSION: str = package_version()
 
-
-# ──────────────────────────── browser helper ─────────────────────────────────
-
-
-def chromium_executable_exists(p) -> bool:
-    """True, если бинарь Chromium для Playwright уже скачан на диск."""
-    try:
-        path = p.chromium.executable_path
-        return bool(path) and os.path.exists(path)
-    except Exception:  # pylint: disable=broad-exception-caught
-        return False
+# Человекочитаемые имена браузеров для --self-check.
+_BROWSER_LABELS = {"msedge": "Microsoft Edge", "chrome": "Google Chrome", "": "встроенный Chromium"}
 
 
 # ──────────────────────────── log management ──────────────────────────────────
@@ -87,12 +78,23 @@ def self_check() -> int:
 
     ok_all = True
 
-    def _chk(label: str, ok: bool, detail: str = "") -> None:
+    def _chk(label: str, ok: bool, detail: str = "", optional: bool = False) -> None:
+        """optional=True: незаданный пункт показывается нейтрально и НЕ заваливает итог.
+
+        Нужно для HH_EMAIL/HH_PASSWORD — это удобство (автозаполнение формы), а не
+        требование. Без флага красный «x» у опционального пункта вводил в заблуждение
+        («Есть проблемы», хотя всё рабочее).
+        """
         nonlocal ok_all
-        mark = "[green]v[/green]" if ok else "[red]x[/red]"
+        if ok:
+            mark = "[green]v[/green]"
+        elif optional:
+            mark = "[dim]-[/dim]"
+        else:
+            mark = "[red]x[/red]"
         suffix = f"  [dim]{detail}[/dim]" if detail else ""
         console.print(f"  {mark}  {label}{suffix}")
-        if not ok:
+        if not ok and not optional:
             ok_all = False
 
     # Python
@@ -107,13 +109,16 @@ def self_check() -> int:
     _chk(f"hhcleaner {_PKG_VERSION}", _PKG_VERSION != "dev",
          "запуск из исходников (pip install -e . не выполнен)" if _PKG_VERSION == "dev" else "")
 
-    # Playwright + Chromium
+    # Playwright + системный браузер для входа
     try:
         with sync_playwright() as p:
-            browser_ok = chromium_executable_exists(p)
+            browser = auth.detect_browser(p)
         _chk("Playwright установлен", True)
-        _chk("Chromium (браузер) скачан", browser_ok,
-             "hhcleaner --setup" if not browser_ok else "")
+        if browser is None:
+            _chk("Браузер для входа (Edge/Chrome)", False,
+                 "установите Microsoft Edge или Google Chrome")
+        else:
+            _chk("Браузер для входа", True, _BROWSER_LABELS.get(browser, browser))
     except Exception as e:  # pylint: disable=broad-exception-caught
         _chk("Playwright", False, str(e))
 
@@ -141,8 +146,10 @@ def self_check() -> int:
     # Credentials
     has_email = bool(os.environ.get("HH_EMAIL", "").strip())
     has_pwd   = bool(os.environ.get("HH_PASSWORD", "").strip())
-    _chk("HH_EMAIL в .env", has_email, "(опционально) задайте для автозаполнения формы")
-    _chk("HH_PASSWORD в .env", has_pwd, "(опционально) задайте для автозаполнения формы")
+    _chk("HH_EMAIL в .env", has_email, "(опционально) задайте для автозаполнения формы",
+         optional=True)
+    _chk("HH_PASSWORD в .env", has_pwd, "(опционально) задайте для автозаполнения формы",
+         optional=True)
 
     if ok_all:
         log_ok("Всё в порядке — можно работать.")
