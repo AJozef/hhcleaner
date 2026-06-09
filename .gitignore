@@ -21,7 +21,8 @@ __pycache__/
 .ruff_cache/
 
 # Профиль браузера с сессией hh.ru — секрет, даёт доступ к аккаунту
-.userdata/
+# (имя совпадает с config.USER_DATA_DIR — на случай HHCLEANER_HOME внутри репо)
+userdata/
 # Старый формат сессии (storage_state), больше не используется, но мог остаться
 auth_state.json
 
