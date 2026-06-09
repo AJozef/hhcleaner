@@ -25,10 +25,17 @@ SCHEDULE_TIME = "09:00"
 def _scheduled_run_command() -> str:
     """Строит команду для планировщика.
 
-    Предпочитает установленный exe-файл; если не найден — python hh_cleaner.py.
+    Порядок: собранный .exe (sys.executable и есть бинарь) → установленный
+    hhcleaner.exe рядом с python → python hh_cleaner.py из исходников.
     """
     run_args = f'--quiet --no-input --log "{DEFAULT_LOG_FILE}"'
 
+    # Замороженный onefile: sys.executable И ЕСТЬ наш hhcleaner.exe — зовём напрямую.
+    # Так задача переживает переименование файла (напр. «hhcleaner (1).exe»).
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" {run_args}'
+
+    # Из исходников/pip: рядом с интерпретатором лежит console-script hhcleaner.exe.
     scripts_dir = os.path.dirname(sys.executable)
     exe_path = os.path.join(scripts_dir, "hhcleaner.exe")
     if os.path.isfile(exe_path):
@@ -38,6 +45,27 @@ def _scheduled_run_command() -> str:
     spec = importlib.util.find_spec("hh_cleaner")
     script = spec.origin if (spec and spec.origin) else "hh_cleaner.py"
     return f'"{sys.executable}" "{os.path.abspath(script)}" {run_args}'
+
+
+def schedule_exists() -> bool:
+    """True, если задача HHCleaner уже зарегистрирована в планировщике.
+
+    Нужно визарду, чтобы не предлагать настройку повторно. На не-Windows и при
+    отсутствии schtasks — False (нечего проверять).
+    """
+    if platform.system() != "Windows":
+        return False
+    try:
+        # Вывод не нужен — нужен только код возврата. НЕ декодируем (DEVNULL):
+        # иначе text=True без кодировки рушится на cp1251 (schtasks отдаёт байт,
+        # которого в cp1251 нет) — UnicodeDecodeError в потоке-читателе.
+        result = subprocess.run(
+            ["schtasks", "/query", "/tn", TASK_NAME],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
 
 
 # ──────────────────────────── публичные функции ───────────────────────────────

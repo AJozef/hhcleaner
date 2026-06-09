@@ -8,8 +8,11 @@ hh_cleaner.py — точка входа.
 Пароль нигде не хранится; капчу и код из почты проходит сам пользователь.
 Если в .env заданы HH_EMAIL и HH_PASSWORD — форма входа заполняется автоматически.
 
+Вход открывается в системном браузере (Edge/Chrome) — отдельно ничего скачивать
+не нужно. На Windows 10/11 Edge есть всегда.
+
 Примеры:
-    hhcleaner --setup                            # первый запуск: поставить браузер + войти
+    hhcleaner --setup                            # первый запуск: войти и сохранить сессию
     hhcleaner --login-only                       # войти и сохранить сессию
     hhcleaner                                    # все шаги по умолчанию (по сессии)
     hhcleaner negotiations                       # только отклики-отказы
@@ -28,13 +31,11 @@ hh_cleaner.py — точка входа.
     hhcleaner --show-log 100                     # последние 100 строк лога
     hhcleaner --clear-log                        # очистить лог
 
-Коды выхода: 0 — успех, 2 — вход не удался, 3 — нужен ручной вход (--login-only),
-4 — не установлен браузер Playwright (запустите --setup).
+Коды выхода: 0 — успех, 2 — вход не удался, 3 — нужен ручной вход (--login-only).
 """
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -58,7 +59,6 @@ from chats_browser import (
     delete_rejected_chats,
 )
 from cli_cmds import (
-    chromium_executable_exists,
     clear_log,
     self_check,
     show_log,
@@ -67,7 +67,6 @@ from config import (
     DEFAULT_LOG_FILE,
     EXIT_LOGIN_FAILED,
     EXIT_NEED_LOGIN,
-    EXIT_NO_BROWSER,
     EXIT_OK,
     OLD_CHATS_DAYS,
     console,
@@ -86,6 +85,7 @@ from scheduler import (
     SCHEDULE_DAY,
     SCHEDULE_TIME,
     install_schedule,
+    schedule_exists,
     uninstall_schedule,
 )
 from steps import ALL_STEPS, API_STEPS, DEFAULT_STEPS, STEP_LABELS
@@ -404,31 +404,9 @@ def _print_stats(stats: dict[str, int], days: int) -> None:
 # ──────────────────────────── browser / setup ─────────────────────────────────
 
 
-def _install_browser() -> int:
-    """Скачивает Chromium для Playwright. Возвращает код возврата процесса."""
-    log("Скачиваю браузер Chromium для Playwright (нужно один раз)...")
-    result = subprocess.run(
-        [sys.executable, "-m", "playwright", "install", "chromium"],
-        check=False,
-    )
-    if result.returncode == 0:
-        log_ok("Браузер установлен.")
-    else:
-        log_err("Не удалось установить браузер. Выполните вручную: playwright install chromium")
-    return result.returncode
-
-
 def _setup(p) -> int:
-    """Первичная настройка: ставит браузер (если нужно) и проводит вход."""
+    """Первичная настройка: проводит вход. Браузер берётся системный (Edge/Chrome)."""
     log_section("Первичная настройка hhcleaner")
-    if chromium_executable_exists(p):
-        log_ok("Браузер Playwright уже установлен.")
-    else:
-        log_warn("Браузер Playwright (Chromium) не установлен.")
-        rc = _install_browser()
-        if rc != 0:
-            return EXIT_LOGIN_FAILED
-
     auth.clear_session()
     context = auth.interactive_login(auth.launch_context(p, headless=False))
     status = check_session(open_session(context))
@@ -441,11 +419,126 @@ def _setup(p) -> int:
     return EXIT_LOGIN_FAILED
 
 
+# ──────────────────────────── wizard (двойной клик) ──────────────────────────
+
+_WIZARD_DISCLAIMER = (
+    "Программа удаляет на hh.ru отклики-отказы и ненужные чаты (отказы, архивные\n"
+    "вакансии, старые переписки).\n"
+    "\n"
+    "Вход вы выполняете сами на сайте hh.ru в окне браузера — программа не видит\n"
+    "ваш пароль и нигде его не хранит. На компьютере остаётся только cookie сессии,\n"
+    "как при обычном входе в браузере.\n"
+    "\n"
+    "Неофициальный инструмент, с hh.ru не связан."
+)
+
+
+def _should_run_wizard() -> bool:
+    """Дружелюбный визард вместо чистого CLI для собранного .exe без аргументов.
+
+    Срабатывает при двойном клике по hhcleaner.exe (или когда человек просто
+    набрал имя exe без флагов). Плановый/безлюдный прогон всегда идёт с флагами
+    (--no-input --quiet --log ...), то есть с аргументами — и визард не трогает.
+    Намеренно НЕ пытаемся отличить двойной клик от запуска в терминале по числу
+    процессов консоли: в onefile-сборке бутлоадер добавляет лишний процесс, и
+    такая эвристика хрупкая. Запуск из исходников (frozen=False) — всегда CLI.
+    """
+    return getattr(sys, "frozen", False) and len(sys.argv) == 1
+
+
+def _wizard_pause() -> None:
+    """Держит окно открытым, пока человек не нажмёт Enter (иначе оно мгновенно закроется)."""
+    try:
+        input("\nНажмите Enter, чтобы закрыть окно…")
+    except EOFError:
+        pass
+
+
+def _wizard_offer_schedule() -> None:
+    """Предлагает настроить еженедельную автоочистку, если она ещё не настроена.
+
+    Спрашиваем явное «да» (по умолчанию НЕТ): отдельный Enter-на-закрытие рядом, и
+    случайное нажатие не должно молча зарегистрировать задачу в планировщике.
+    """
+    if schedule_exists():
+        console.print("[dim]Автоматическая еженедельная очистка уже настроена.[/dim]")
+        return
+    console.print(
+        "\nМожно настроить автоматическую очистку раз в неделю — "
+        "тогда запускать вручную не придётся."
+    )
+    try:
+        answer = input("Настроить автоочистку? [y/N]: ").strip().lower()
+    except EOFError:
+        return
+    if answer in ("y", "yes", "д", "да"):
+        install_schedule(SCHEDULE_DAY, SCHEDULE_TIME)
+
+
+def _wizard_login(p):
+    """Открывает видимое окно браузера и ждёт ручного входа на hh.ru."""
+    console.print("Сейчас откроется окно браузера — войдите на hh.ru как обычно.")
+    console.print("[dim]Капчу и код из почты/SMS вводите там же, вручную.[/dim]\n")
+    return auth.interactive_login(auth.launch_context(p, headless=False))
+
+
+def _wizard(p) -> int:
+    """Сценарий на двойной клик: дисклеймер → вход → очистка → итоги → пауза."""
+    console.rule("[bold cyan]hhcleaner[/bold cyan]")
+    console.print(_WIZARD_DISCLAIMER)
+    try:
+        input("\nНажмите Enter, чтобы начать (или закройте окно, чтобы отменить)… ")
+    except EOFError:
+        return EXIT_OK
+    console.print()
+
+    # Вход: рабочую сессию переиспользуем; если её нет/протухла — открываем браузер.
+    if auth.session_exists():
+        console.print("Проверяю сохранённый вход…")
+        context = auth.launch_context(p, headless=True)
+        session, status = _open_and_check(context)
+        if not status.ok:
+            context.close()
+            log_warn("Сохранённый вход устарел — нужно войти заново.")
+            context = _wizard_login(p)
+            session, status = _open_and_check(context)
+    else:
+        context = _wizard_login(p)
+        session, status = _open_and_check(context)
+
+    if not status.ok or session is None:
+        log_err("Войти не удалось. Закройте окно и попробуйте ещё раз.")
+        context.close()
+        _wizard_pause()
+        return EXIT_LOGIN_FAILED
+
+    console.print("\nНачинаю очистку — это может занять несколько минут…\n")
+    start = time.monotonic()
+    results = run_steps(context, session, DEFAULT_STEPS, OLD_CHATS_DAYS)
+    _print_summary(results, time.monotonic() - start, dry_run=False)
+    context.close()
+
+    console.print("\n[green]Готово![/green]")
+    _wizard_offer_schedule()
+    _wizard_pause()
+    return EXIT_OK
+
+
 # ──────────────────────────── main entry ─────────────────────────────────────
 
 
 def main() -> int:
     """Готовит авторизацию и выполняет выбранные шаги. Возвращает код выхода."""
+    # Двойной клик по .exe (без аргументов) — ведём обывателя за руку, без флагов.
+    if _should_run_wizard():
+        try:
+            with sync_playwright() as p:
+                return _wizard(p)
+        except auth.LoginError as e:
+            log_err(str(e))
+            _wizard_pause()
+            return EXIT_LOGIN_FAILED
+
     args = parse_args()
 
     set_quiet(args.quiet)
@@ -487,24 +580,12 @@ def main() -> int:
 
 
 def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
-    """Тело работы внутри Playwright: авторизация и выполнение шагов."""
-    # Детект первого запуска: нет браузера + нет сессии -> предлагаем --setup.
-    if not chromium_executable_exists(p):
-        log_err("Браузер Playwright (Chromium) не установлен.")
-        if not args.no_input and not auth.session_exists():
-            if args.yes:
-                return _setup(p)
-            log_warn("Похоже, это первый запуск. Запустить автоматическую настройку?")
-            try:
-                answer = input("  hhcleaner --setup [Y/n]: ").strip().lower()
-            except EOFError:
-                answer = "n"
-            if answer in ("", "y", "yes", "д", "да"):
-                return _setup(p)
-        log_err("Установите браузер: hhcleaner --setup")
-        log_err("Либо вручную:       playwright install chromium")
-        return EXIT_NO_BROWSER
+    """Тело работы внутри Playwright: авторизация и выполнение шагов.
 
+    Браузер берётся системный (Edge/Chrome) внутри auth.launch_context — отдельная
+    проверка «установлен ли браузер» не нужна: если ни Edge/Chrome, ни встроенного
+    Chromium нет, launch_context поднимет LoginError с понятной подсказкой.
+    """
     # ── Режим «только вход» ───────────────────────────────────────────────────
     if args.login_only:
         auth.clear_session()
