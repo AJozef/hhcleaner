@@ -1,8 +1,8 @@
 """Команды hhcleaner, не требующие запущенного браузера Playwright.
 
 Содержит:
-    log     — show / clear
-    doctor  — --self-check (диагностика окружения)
+    show_log / clear_log  — подкоманда `log show` / `log clear`
+    self_check            — подкоманда `doctor` (диагностика окружения)
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from config import (
 
 _PKG_VERSION: str = package_version()
 
-# Человекочитаемые имена браузеров для --self-check.
+# Человекочитаемые имена браузеров для doctor.
 _BROWSER_LABELS = {"msedge": "Microsoft Edge", "chrome": "Google Chrome", "": "встроенный Chromium"}
 
 
@@ -74,7 +74,7 @@ def clear_log(log_path: str | None = None, assume_yes: bool = False) -> int:
 
 def self_check() -> int:
     """Диагностика окружения: версии, браузер, сессия, лог."""
-    log_section("Диагностика hhcleaner (--self-check)")
+    log_section("Диагностика hhcleaner (doctor)")
 
     ok_all = True
 
@@ -127,7 +127,7 @@ def self_check() -> int:
     _chk(
         "Сессия",
         session_ok,
-        "hhcleaner --login-only" if not session_ok else USER_DATA_DIR,
+        "hhcleaner login" if not session_ok else USER_DATA_DIR,
     )
 
     # Каталог данных + лог

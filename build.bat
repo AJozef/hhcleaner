@@ -53,5 +53,5 @@ if errorlevel 1 (
 
 echo.
 echo [+] Build successful: dist\hhcleaner.exe
-echo     Next: dist\hhcleaner.exe --self-check  ^|  upload to GitHub Releases
+echo     Next: dist\hhcleaner.exe doctor  ^|  upload to GitHub Releases
 exit /b 0

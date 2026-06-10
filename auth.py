@@ -110,7 +110,7 @@ def detect_browser(playwright) -> str | None:
     """Какой браузер доступен для входа: 'msedge'/'chrome'/'' (встроенный) или None.
 
     Пробует кратко запустить НЕпостоянный браузер (без блокировки профиля) —
-    для диагностики (--self-check). Возвращает первый рабочий вариант или None.
+    для диагностики (hhcleaner doctor). Возвращает первый рабочий вариант или None.
     """
     for channel in [*BROWSER_CHANNELS, _BUNDLED]:
         kwargs = {} if channel == _BUNDLED else {"channel": channel}
@@ -175,10 +175,12 @@ def has_login_credentials() -> bool:
 def headless_login(context: BrowserContext) -> bool:
     """Тихий вход через HH_EMAIL/HH_PASSWORD — без участия человека.
 
-    Используется в --no-input при протухшей сессии: пытаемся за ~15 секунд
-    автоматически залогиниться через автозаполнение формы. Капча и 2FA
-    автоматически не проходятся — тогда возвращаем False, и вызывающий код
-    решает что делать (notify + exit 3).
+    Используется в --no-input при протухшей сессии: пытаемся автоматически
+    залогиниться через автозаполнение формы. Бюджет времени складывается из
+    ожидания полей (до ~10 c) и редиректа после входа (_HEADLESS_LOGIN_TIMEOUT_MS,
+    15 c) — то есть до ~25 c в худшем случае. Капча и 2FA автоматически не
+    проходятся — тогда возвращаем False, и вызывающий код решает что делать
+    (notify + exit 3).
     """
     if not has_login_credentials():
         return False
@@ -243,7 +245,7 @@ def interactive_login(context: BrowserContext) -> BrowserContext:
     except PlaywrightTimeout as exc:
         raise LoginError(
             "Вход не завершился за 5 минут. Если форма заполнена — нажмите вход "
-            "и пройдите капчу/2FA; затем запустите --login-only ещё раз."
+            "и пройдите капчу/2FA; затем запустите hhcleaner login ещё раз."
         ) from exc
     except PlaywrightError as exc:
         raise LoginError("Окно браузера закрыто до завершения входа.") from exc

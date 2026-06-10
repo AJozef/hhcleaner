@@ -5,13 +5,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import hh_cleaner
+import runner
 from chats_api import ChatAPIError
 
 
 @pytest.fixture
 def mocked_steps(monkeypatch):
-    """Подменяет все step-функции в hh_cleaner моками. Возвращает их dict."""
+    """Подменяет все step-функции в runner моками. Возвращает их dict."""
     mocks = {
         "mark_all_chats_read": MagicMock(return_value=5),
         "delete_rejected_negotiations": MagicMock(return_value=3),
@@ -25,7 +25,7 @@ def mocked_steps(monkeypatch):
         "delete_old_chats_browser": MagicMock(return_value=9),
     }
     for name, mock in mocks.items():
-        monkeypatch.setattr(hh_cleaner, name, mock)
+        monkeypatch.setattr(runner, name, mock)
     return mocks
 
 
@@ -41,7 +41,7 @@ class TestRunSteps:
     def test_read_all_calls_only_mark_all(self, mocked_steps):
         ctx, _ = _make_context()
         session = MagicMock()
-        results = hh_cleaner.run_steps(ctx, session, ["read-all"], days=30)
+        results = runner.run_steps(ctx, session, ["read-all"], days=30)
         assert results == {"read-all": 5}
         mocked_steps["mark_all_chats_read"].assert_called_once_with(session)
         mocked_steps["delete_rejected_negotiations"].assert_not_called()
@@ -53,13 +53,13 @@ class TestRunSteps:
         ctx, _ = _make_context()
         session = MagicMock()
         mocked_steps["mark_all_chats_read"].side_effect = ChatAPIError("401")
-        results = hh_cleaner.run_steps(ctx, session, ["read-all"], days=30)
+        results = runner.run_steps(ctx, session, ["read-all"], days=30)
         assert results == {"read-all": 0}
 
     def test_negotiations_opens_and_closes_own_page(self, mocked_steps):
         ctx, page = _make_context()
         session = MagicMock()
-        results = hh_cleaner.run_steps(
+        results = runner.run_steps(
             ctx, session, ["negotiations"], days=30, dry_run=True, limit=10
         )
         assert results == {"negotiations": 3}
@@ -72,7 +72,7 @@ class TestRunSteps:
     def test_api_steps_grouped_into_single_call(self, mocked_steps):
         ctx, _ = _make_context()
         session = MagicMock()
-        results = hh_cleaner.run_steps(
+        results = runner.run_steps(
             ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"],
             days=45, dry_run=False, limit=None, cutoff=None,
         )
@@ -89,7 +89,7 @@ class TestRunSteps:
         ctx, _ = _make_context()
         session = MagicMock()
         mocked_steps["delete_chats_api_combined"].side_effect = ChatAPIError("401")
-        results = hh_cleaner.run_steps(
+        results = runner.run_steps(
             ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"],
             days=30,
         )
@@ -104,17 +104,42 @@ class TestRunSteps:
         assert results["archived-vacancy"] == 8
         assert results["old-chats"] == 9
 
+    def test_force_browser_skips_api(self, mocked_steps):
+        # --force-browser: API не дёргаем, сразу идём в браузерный путь.
+        ctx, _ = _make_context()
+        session = MagicMock()
+        results = runner.run_steps(
+            ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"],
+            days=30, force_browser=True,
+        )
+        mocked_steps["delete_chats_api_combined"].assert_not_called()
+        mocked_steps["delete_rejected_chats"].assert_called_once_with(
+            ctx, dry_run=False, limit=None
+        )
+        assert results["chats-rejected"] == 7
+        assert results["archived-vacancy"] == 8
+        assert results["old-chats"] == 9
+
+    def test_force_browser_skips_read_all(self, mocked_steps):
+        # read-all ходит только через API — в --force-browser он пропускается (0).
+        ctx, _ = _make_context()
+        results = runner.run_steps(
+            ctx, MagicMock(), ["read-all"], days=30, force_browser=True,
+        )
+        assert results == {"read-all": 0}
+        mocked_steps["mark_all_chats_read"].assert_not_called()
+
     def test_negotiations_page_closed_on_exception(self, mocked_steps):
         ctx, page = _make_context()
         session = MagicMock()
         mocked_steps["delete_rejected_negotiations"].side_effect = RuntimeError("boom")
         with pytest.raises(RuntimeError):
-            hh_cleaner.run_steps(ctx, session, ["negotiations"], days=30)
+            runner.run_steps(ctx, session, ["negotiations"], days=30)
         page.close.assert_called_once()
 
     def test_empty_steps_returns_empty_dict(self, mocked_steps):
         ctx, _ = _make_context()
-        results = hh_cleaner.run_steps(ctx, MagicMock(), [], days=30)
+        results = runner.run_steps(ctx, MagicMock(), [], days=30)
         assert results == {}
         # Никакая step-функция не вызвалась.
         for name, mock in mocked_steps.items():

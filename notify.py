@@ -21,7 +21,7 @@ def session_expired() -> None:
     """Показывает системное уведомление: сессия истекла, нужен ручной вход."""
     _notify(
         title=_APP,
-        body="Сессия hh.ru истекла — выполните: hhcleaner --login-only",
+        body="Сессия hh.ru истекла — выполните: hhcleaner login",
     )
 
 

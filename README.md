@@ -29,28 +29,35 @@ cd hhcleaner
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e .
-hhcleaner --setup
+hhcleaner login
 ```
 
 Требуется Python 3.9+. Подробнее - в [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Использование из командной строки
 
-Двойной клик запускает простой визард. Если нужен контроль - те же возможности доступны флагами:
+Двойной клик запускает простой визард. Если нужен контроль - есть подкоманды и флаги:
 
 ```powershell
-hhcleaner                            # все шаги по умолчанию
+hhcleaner                            # все шаги по умолчанию (команда clean неявная)
 hhcleaner negotiations               # только отклики-отказы
 hhcleaner old-chats --days 30        # только чаты старше 30 дней
 hhcleaner --dry-run                  # показать что будет удалено, ничего не трогая
-hhcleaner --status                   # статистика по чатам без удаления
-hhcleaner --check                    # проверить, рабочая ли сессия
-hhcleaner --self-check               # диагностика окружения
-hhcleaner --install-schedule         # зарегистрировать еженедельный запуск
-hhcleaner --help                     # все опции
+hhcleaner --force-browser            # не ходить в API, чистить через браузер
+hhcleaner login                      # войти и сохранить сессию
+hhcleaner status                     # статистика по чатам без удаления
+hhcleaner check                      # проверить, рабочая ли сессия
+hhcleaner doctor                     # диагностика окружения
+hhcleaner schedule install           # зарегистрировать еженедельный запуск
+hhcleaner log show 100               # последние 100 строк лога
+hhcleaner --help                     # все команды и опции
 ```
 
-Доступные шаги: `read-all`, `negotiations`, `chats-rejected`, `archived-vacancy`, `old-chats`. Шаг `chats-rejected` ходит через API, а при его отказе (401/403) автоматически переключается на браузерный метод.
+`clean` - команда по умолчанию: `hhcleaner`, `hhcleaner negotiations`, `hhcleaner --dry-run` запускают очистку без явного слова `clean`.
+
+Доступные шаги: `read-all`, `negotiations`, `chats-rejected`, `archived-vacancy`, `old-chats`. Шаг `chats-rejected` ходит через API, а при его отказе (401/403) автоматически переключается на браузерный метод (форсировать браузерный путь можно флагом `--force-browser`).
+
+> При самом первом реальном прогоне из CLI программа сначала показывает предпросмотр (как `--dry-run`) и просит повторить команду - страховка, чтобы случайно не удалить лишнее. Дальше работает как обычно.
 
 ## .env (опционально)
 

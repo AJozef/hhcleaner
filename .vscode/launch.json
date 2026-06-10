@@ -9,7 +9,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/hh_cleaner.py",
-            "args": ["--login-only"],
+            "args": ["login"],
             "console": "integratedTerminal"
         },
         {

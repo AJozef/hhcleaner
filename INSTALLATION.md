@@ -38,13 +38,13 @@
 
 ```powershell
 # Еженедельный запуск (по умолчанию — понедельник, 9:00)
-.\hhcleaner.exe --install-schedule
+.\hhcleaner.exe schedule install
 
 # Свой день и время:
-.\hhcleaner.exe --install-schedule --schedule-day FRI --schedule-time 10:00
+.\hhcleaner.exe schedule install --day FRI --time 10:00
 
 # Убрать из планировщика:
-.\hhcleaner.exe --uninstall-schedule
+.\hhcleaner.exe schedule uninstall
 ```
 
 Плановый запуск идёт без окна. Если сессия истекла, придёт системное уведомление с просьбой войти заново.
@@ -91,7 +91,7 @@ HH_PASSWORD=your_password
 Откройте PowerShell в папке с программой и запустите диагностику:
 
 ```powershell
-.\hhcleaner.exe --self-check
+.\hhcleaner.exe doctor
 ```
 
 Она проверит версию, наличие браузера для входа, сессию, каталог данных и лог и подскажет, что не так.

@@ -3,7 +3,9 @@
 #   python -m venv .venv
 #   .venv\Scripts\activate
 #   pip install -r requirements.txt
-#   playwright install chromium     # один раз — скачать браузер для Playwright
+#   # Браузер для входа берётся системный (Edge/Chrome) — качать Chromium НЕ нужно.
+#   # Только если в системе нет ни Edge, ни Chrome — поставьте запасной Chromium:
+#   #   playwright install chromium
 #
 # Для разработки (тесты + линтер): pip install -e ".[dev]"
 -e .

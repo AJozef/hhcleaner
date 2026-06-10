@@ -110,7 +110,7 @@ def install_schedule(
     if result.returncode == 0:
         log_ok(f"Задача «{TASK_NAME}» создана: каждый {day} в {time_str}.")
         log(f"Управление: Планировщик задач -> {TASK_NAME}")
-        log("Удалить:    hhcleaner --uninstall-schedule")
+        log("Удалить:    hhcleaner schedule uninstall")
     else:
         log_err("Не удалось создать задачу:")
         log_err(result.stderr or result.stdout)
