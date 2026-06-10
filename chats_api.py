@@ -488,13 +488,22 @@ def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-po
     collected = _collect_multi_chat_ids(session, predicates)
 
     results: dict[str, int] = {}
+    already_left: set[str] = set()
     for step in active:
-        ids = collected.get(step, [])
+        # Один чат может попасть под несколько предикатов сразу (отказ + архивная
+        # вакансия + старый). Отбрасываем id, уже покинутые на предыдущем шаге:
+        # иначе второй leave вернул бы ошибку «чат уже покинут», и удаление
+        # приписалось бы не тому шагу, а запрос ушёл бы впустую.
+        ids = [cid for cid in collected.get(step, []) if cid not in already_left]
         # old-chats: лейбл из фактического порога (cutoff/--days).
         label = SCAN_LABELS.get(step, f"Чатов старше {effective_cutoff:%Y-%m-%d}")
         log(f"{label}: {len(ids)}")
         results[step] = _leave_chats(
             session, ids, dry_run=dry_run, limit=limit
         )
+        if not dry_run:
+            # _leave_chats режет список по limit — помечаем покинутыми ровно те,
+            # что реально попытались удалить.
+            already_left.update(ids if limit is None else ids[:limit])
 
     return results
