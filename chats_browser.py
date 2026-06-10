@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from config import (
@@ -23,11 +24,8 @@ from config import (
     log_ok,
     log_section,
     log_warn,
-    parse_iso_datetime,
 )
 from ui_selectors import (
-    ARCHIVED_VACANCY_MARKERS,
-    ARCHIVED_VACANCY_TEXT_HOSTS,
     ARCHIVED_VACANCY_TEXTS,
     CHAT_COMPANY,
     CHAT_LEAVE,
@@ -36,11 +34,12 @@ from ui_selectors import (
     CHAT_MENU,
     CHAT_REJECTED_MARK,
     CHAT_REJECTED_TEXT,
-    CHAT_TIME_FALLBACKS,
-    CHAT_TIME_PRIMARY,
+    CHAT_TIME,
     CHAT_TITLE,
     CHATIK_LAYOUT,
-    INTERVIEW_MARKERS,
+    INTERVIEW_BUBBLE,
+    INTERVIEW_TEXTS,
+    VACANCY_INTENTION,
 )
 
 _CHATIK_BASE = "https://chatik.hh.ru"
@@ -72,7 +71,8 @@ def _full_url(href: str) -> str:
 def _scroll_collect_all(page) -> dict[str, dict]:
     """Прокручивает весь список чатов и возвращает {href: info_dict}.
 
-    info_dict: href, company, title, is_rejected, date_iso (str | None).
+    info_dict: href, company, title, is_rejected, date_text (str | None) —
+    «сырой» текст подписи даты («01.06», «вчера», «пн», «31.12.25»).
     """
     page.evaluate(
         "(sel) => { const s = document.querySelector(sel); if (s) s.scrollTop = 0; }",
@@ -99,7 +99,7 @@ def _scroll_collect_all(page) -> dict[str, dict]:
                     "company":     cmp_el.inner_text().strip() if cmp_el else "",
                     "title":       title_el.inner_text().strip() if title_el else "",
                     "is_rejected": is_rejected,
-                    "date_iso":    _extract_date_iso(chat),
+                    "date_text":   _extract_date_text(chat),
                 }
             except Exception:  # pylint: disable=broad-exception-caught
                 continue
@@ -131,29 +131,65 @@ def _scroll_collect_all(page) -> dict[str, dict]:
     return collected
 
 
-def _extract_date_iso(chat_el) -> str | None:
-    """Ищет ISO-дату последнего сообщения в элементе списка чатов.
+def _extract_date_text(chat_el) -> str | None:
+    """Возвращает «сырой» текст подписи даты из карточки чата (или None).
 
-    Порядок попыток (от надёжного к ненадёжному):
-    1. <time datetime="..."> — стандарт HTML5, machine-readable.
-    2. [data-qa*='date|time'] или [class*='date--|time--'] с атрибутом datetime.
-    Без datetime-атрибута возвращаем None — дата не определена, чат не удаляем.
+    В текущей вёрстке chatik машиночитаемого <time datetime> нет — дата живёт
+    текстом в [data-qa='chat-cell-creation-time']: «01.06», «вчера», «пн»,
+    «31.12.25». Разбор — в _parse_chat_date_text.
     """
     try:
-        el = chat_el.query_selector(CHAT_TIME_PRIMARY)
+        el = chat_el.query_selector(CHAT_TIME)
         if el:
-            return el.get_attribute("datetime")
+            return (el.inner_text() or "").strip()
     except Exception:  # pylint: disable=broad-exception-caught
         pass
-    for sel in CHAT_TIME_FALLBACKS:
+    return None
+
+
+# Сокращённые названия дней недели в подписи даты chatik → номер дня (Пн=0..Вс=6).
+_WEEKDAYS = {"пн": 0, "вт": 1, "ср": 2, "чт": 3, "пт": 4, "сб": 5, "вс": 6}
+
+
+def _parse_chat_date_text(text: str | None, now: datetime | None = None) -> datetime | None:
+    """Разбирает подпись даты chatik в дату (tz-aware UTC) или None.
+
+    Форматы hh.ru (наблюдения на 2026-06):
+      • «сегодня» или время «ЧЧ:ММ»          → сегодня;
+      • «вчера»                              → вчера;
+      • «пн»…«вс» (сокр. день недели)        → ближайший прошедший такой день
+                                               (в окне 2–6 дней назад);
+      • «ДД.ММ» (без года)                   → текущий год (8+ дней назад);
+      • «ДД.ММ.ГГ» / «ДД.ММ.ГГГГ»            → явный год (прошлые годы).
+
+    Дата возвращается с точностью до суток (полночь UTC) — old-chats всё равно
+    сравнивает по дню. Нераспознанное → None (чат пропускается, не удаляется).
+    """
+    if not text:
+        return None
+    now = now or datetime.now(timezone.utc)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    t = text.strip().lower().rstrip(".")
+
+    if t == "сегодня" or re.fullmatch(r"\d{1,2}:\d{2}", t):
+        return today
+    if t == "вчера":
+        return today - timedelta(days=1)
+    if t in _WEEKDAYS:
+        delta = (today.weekday() - _WEEKDAYS[t]) % 7
+        return today - timedelta(days=delta or 7)
+
+    m = re.fullmatch(r"(\d{1,2})\.(\d{1,2})(?:\.(\d{2}|\d{4}))?", t)
+    if m:
+        day, month, year = int(m.group(1)), int(m.group(2)), m.group(3)
+        if year is None:
+            y = today.year
+        else:
+            y = int(year) if len(year) == 4 else 2000 + int(year)
         try:
-            el = chat_el.query_selector(sel)
-            if el:
-                v = el.get_attribute("datetime")
-                if v:
-                    return v
-        except Exception:  # pylint: disable=broad-exception-caught
-            continue
+            return datetime(y, month, day, tzinfo=timezone.utc)
+        except ValueError:
+            return None
     return None
 
 
@@ -173,44 +209,81 @@ def _leave_from_current_page(page, company: str, title: str) -> bool:
     return True
 
 
+# Открытие страницы чата иногда падает транзиентно: ERR_NETWORK_IO_SUSPENDED
+# (ОС душит сетевой IO, когда машина на миг засыпает), timeout, перебивка
+# навигации. Без повтора такой чат молча выпадал бы из проверки на архив.
+_GOTO_RETRIES = 3
+_GOTO_RETRY_PAUSE = 1.5
+
+
+def _open_chat_page(page, href: str) -> bool:
+    """Открывает страницу чата с повтором при транзиентном сетевом сбое.
+
+    True при успехе; иначе логирует последнюю ошибку и возвращает False.
+    """
+    url = _full_url(href)
+    last_err: Exception | None = None
+    for attempt in range(_GOTO_RETRIES):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            return True
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            last_err = e
+            if attempt < _GOTO_RETRIES - 1:
+                time.sleep(_GOTO_RETRY_PAUSE)
+    log(f"    ! Не открылся {href} ({_GOTO_RETRIES} попытки): {last_err}")
+    return False
+
+
 def _leave_chat(page, href: str, company: str, title: str) -> bool:
     """Открывает чат и покидает его. True при успехе."""
-    try:
-        page.goto(_full_url(href), wait_until="domcontentloaded", timeout=15000)
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        log(f"    ! Не открылся {href}: {e}")
+    if not _open_chat_page(page, href):
         return False
     time.sleep(BROWSER_NAV_PAUSE)
     return _leave_from_current_page(page, company, title)
 
 
-def _is_archived_in_current_page(page) -> bool:
-    """Проверяет признаки архивной вакансии на уже открытой странице чата."""
-    for sel in ARCHIVED_VACANCY_MARKERS:
-        try:
-            if page.query_selector(sel):
-                return True
-        except Exception:  # pylint: disable=broad-exception-caught
-            continue
+def _norm(text: str | None) -> str:
+    """Нормализует текст для подстрочного матчинга: &nbsp;→пробел, нижний регистр."""
+    return (text or "").replace("\xa0", " ").strip().lower()
 
-    for sel in ARCHIVED_VACANCY_TEXT_HOSTS:
+
+def _text_matches(text: str | None, needles) -> bool:
+    """True, если нормализованный text содержит любую из подстрок needles."""
+    t = _norm(text)
+    return any(n in t for n in needles)
+
+
+def _any_badge_matches(page, selector: str, needles) -> bool:
+    """True, если текст любого элемента по selector содержит подстроку из needles."""
+    try:
+        elements = page.query_selector_all(selector)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+    for el in elements:
         try:
-            el = page.query_selector(sel)
-            if el:
-                text = el.inner_text() or ""
-                if any(m in text for m in ARCHIVED_VACANCY_TEXTS):
-                    return True
+            if _text_matches(el.inner_text(), needles):
+                return True
         except Exception:  # pylint: disable=broad-exception-caught
             continue
     return False
 
 
-def _safe_query(page, sel: str) -> bool:
-    """query_selector без исключений — для использования в any()."""
-    try:
-        return bool(page.query_selector(sel))
-    except Exception:  # pylint: disable=broad-exception-caught
-        return False
+def _is_archived_in_current_page(page) -> bool:
+    """True, если на открытой странице чата вакансия помечена как неактивная.
+
+    Маркер — бейдж-«интенция» с текстом вида «Вакансия в архиве»
+    (см. VACANCY_INTENTION / ARCHIVED_VACANCY_TEXTS).
+    """
+    return _any_badge_matches(page, VACANCY_INTENTION, ARCHIVED_VACANCY_TEXTS)
+
+
+def _is_interview_in_current_page(page) -> bool:
+    """True, если в открытом чате есть событие-собеседование (пузырь «Собеседование»).
+
+    Аналог applicantState=INTERVIEW из API — такие чаты НЕ трогаем.
+    """
+    return _any_badge_matches(page, INTERVIEW_BUBBLE, INTERVIEW_TEXTS)
 
 
 # ──────────────────────────── публичные функции ──────────────────────────────
@@ -275,10 +348,10 @@ def delete_old_chats_browser(
 
     cutoff — абсолютная дата среза (из --since). Приоритет над days.
     limit — страховочный лимит на число удалений (None = без ограничения).
-    Дату читает из <time datetime="..."> в списке чатов (один прокрут).
-    Чат без определённой даты пропускается.
+    Дату читает из текстовой подписи в списке чатов (один прокрут) и разбирает
+    через _parse_chat_date_text. Чат без распознанной даты пропускается.
     """
-    log_section(f"Удаление чатов старше {days} дней (браузер-резерв)")
+    log_section(f"Удаление чатов старше {days} дней (браузер)")
     effective_cutoff = cutoff or (datetime.now(timezone.utc) - timedelta(days=days))
     log(f"Порог: {effective_cutoff.strftime('%Y-%m-%d')}")
 
@@ -293,7 +366,7 @@ def delete_old_chats_browser(
     old_items = []
     skipped = 0
     for item in found.values():
-        dt = parse_iso_datetime(item["date_iso"])
+        dt = _parse_chat_date_text(item["date_text"])
         if dt is None:
             skipped += 1
         elif dt < effective_cutoff:
@@ -328,7 +401,7 @@ def delete_archived_vacancy_chats_browser(
     limit — страховочный лимит на число удалений (None = без ограничения).
     O(n) по числу чатов — медленнее других методов.
     """
-    log_section("Удаление чатов по архивным вакансиям (браузер-резерв)")
+    log_section("Удаление чатов по архивным вакансиям (браузер)")
     log_warn("Проверяется каждый чат — прогон займёт больше времени чем обычно.")
 
     page = context.new_page()
@@ -342,15 +415,11 @@ def delete_archived_vacancy_chats_browser(
     to_leave = []
     for i, item in enumerate(found.values(), 1):
         log(f"  [{i}/{len(found)}] {item['company']}")
-        try:
-            page.goto(_full_url(item["href"]), wait_until="domcontentloaded", timeout=15000)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            log(f"    ! Не открылся: {e}")
+        if not _open_chat_page(page, item["href"]):
             continue
         time.sleep(BROWSER_VACANCY_PAUSE)
 
-        is_interview = any(_safe_query(page, sel) for sel in INTERVIEW_MARKERS)
-        if is_interview:
+        if _is_interview_in_current_page(page):
             log("    Пропущено (собеседование).")
             continue
 

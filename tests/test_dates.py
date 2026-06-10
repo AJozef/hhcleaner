@@ -1,13 +1,22 @@
-"""Тесты разбора дат: parse_iso_datetime и argparse-тип _iso_date."""
+"""Тесты разбора дат: parse_iso_datetime, argparse-тип _iso_date и подпись chatik."""
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from chats_browser import _parse_chat_date_text
+from cli import _iso_date
 from config import parse_iso_datetime
-from hh_cleaner import _iso_date
+
+# Опорное «сейчас» для тестов подписи даты: среда, 10 июня 2026 (UTC).
+# Тогда: вчера=09.06(вт), пн=08.06, вс=07.06, сб=06.06, пт=05.06, чт=04.06.
+_NOW = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+
+
+def _d(y, m, d):
+    return datetime(y, m, d, tzinfo=timezone.utc)
 
 
 class TestParseIsoDatetime:
@@ -60,3 +69,53 @@ class TestIsoDate:
         # почти весь аккаунт. Должна отклоняться на этапе разбора аргументов.
         with pytest.raises(argparse.ArgumentTypeError):
             _iso_date("2999-12-31")
+
+
+class TestParseChatDateText:
+    """Разбор текстовой подписи даты из списка чатов chatik (браузерный путь)."""
+
+    def test_today_word(self):
+        assert _parse_chat_date_text("сегодня", _NOW) == _d(2026, 6, 10)
+
+    def test_today_time(self):
+        # Сегодняшние чаты могут подписываться временем ЧЧ:ММ — это всё сегодня.
+        assert _parse_chat_date_text("14:30", _NOW) == _d(2026, 6, 10)
+        assert _parse_chat_date_text("9:05", _NOW) == _d(2026, 6, 10)
+
+    def test_yesterday(self):
+        assert _parse_chat_date_text("вчера", _NOW) == _d(2026, 6, 9)
+
+    @pytest.mark.parametrize("label,day", [
+        ("пн", 8), ("вс", 7), ("сб", 6), ("пт", 5), ("чт", 4),
+    ])
+    def test_weekday_abbr(self, label, day):
+        # Ближайший прошедший день недели в окне 2–6 дней назад.
+        assert _parse_chat_date_text(label, _NOW) == _d(2026, 6, day)
+
+    def test_weekday_case_and_dot(self):
+        assert _parse_chat_date_text("Пн.", _NOW) == _d(2026, 6, 8)
+
+    def test_day_month_current_year(self):
+        # «ДД.ММ» без года — текущий год.
+        assert _parse_chat_date_text("02.06", _NOW) == _d(2026, 6, 2)
+        assert _parse_chat_date_text("31.01", _NOW) == _d(2026, 1, 31)
+
+    def test_day_month_two_digit_year(self):
+        assert _parse_chat_date_text("31.12.25", _NOW) == _d(2025, 12, 31)
+
+    def test_day_month_four_digit_year(self):
+        assert _parse_chat_date_text("31.12.2025", _NOW) == _d(2025, 12, 31)
+
+    @pytest.mark.parametrize("bad", [None, "", "   ", "хрень", "32.13", "99.99.99"])
+    def test_unparseable_returns_none(self, bad):
+        assert _parse_chat_date_text(bad, _NOW) is None
+
+    def test_old_date_is_before_cutoff(self):
+        # Смысловая проверка: «31.12.25» должен попасть под порог 60 дней.
+        cutoff = _NOW - timedelta(days=60)
+        assert _parse_chat_date_text("31.12.25", _NOW) < cutoff
+
+    def test_recent_label_after_cutoff(self):
+        # «вчера» при пороге 60 дней — не старый.
+        cutoff = _NOW - timedelta(days=60)
+        assert _parse_chat_date_text("вчера", _NOW) > cutoff

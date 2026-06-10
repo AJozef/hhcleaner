@@ -19,15 +19,15 @@ pytest                    # все тесты
 pytest -v                 # подробно
 pytest tests/test_args.py # конкретный файл
 
-pylint hh_cleaner.py auth.py config.py steps.py chats_api.py chats_browser.py negotiations.py notify.py scheduler.py cli_cmds.py ui_selectors.py
+pylint hh_cleaner.py cli.py wizard.py runner.py report.py auth.py config.py steps.py chats_api.py chats_browser.py negotiations.py notify.py scheduler.py cli_cmds.py ui_selectors.py
 ```
 
 ## Ручная проверка
 
 ```powershell
-hhcleaner --self-check    # диагностика окружения (браузер, сессия, конфиг)
-hhcleaner --login-only    # вход и сохранение сессии
-hhcleaner --check         # рабочая ли сессия
+hhcleaner doctor          # диагностика окружения (браузер, сессия, конфиг)
+hhcleaner login           # вход и сохранение сессии
+hhcleaner check           # рабочая ли сессия
 hhcleaner --dry-run       # что удалится, без удаления
 hhcleaner                 # реальный прогон
 ```
@@ -48,7 +48,7 @@ build.bat
 
 ```powershell
 dist\hhcleaner.exe --version
-dist\hhcleaner.exe --self-check
+dist\hhcleaner.exe doctor
 ```
 
 ### Что бандлится, а что нет
@@ -57,7 +57,7 @@ dist\hhcleaner.exe --self-check
 - **Не бандлится:** сам браузер. Вход идёт через установленный в системе Edge/Chrome (`auth.launch_context`), поэтому .exe лёгкий и первый запуск без скачивания ~150 МБ Chromium.
 - Профиль и cookies живут в `~/.hhcleaner/`, а не внутри .exe.
 
-Двойной клик по .exe без аргументов запускает дружелюбный визард (`hh_cleaner._wizard`); запуск с любыми флагами/шагами — обычный CLI. Поэтому `console=True` в spec.
+Двойной клик по .exe без аргументов запускает дружелюбный визард (`wizard.run`); запуск с любыми подкомандами/флагами/шагами — обычный CLI. Поэтому `console=True` в spec.
 
 ### Файлы сборки
 
@@ -96,21 +96,51 @@ git push origin v1.2.0
 
 ```
 hhcleaner/
-├── hh_cleaner.py        # Точка входа, CLI-диспетчер, визард двойного клика
+├── hh_cleaner.py        # Точка входа: визард-или-CLI (тонкая main)
+├── cli.py               # Подкоманды argparse, их обработчики, диспетчер
+├── wizard.py            # Визард двойного клика (.exe без аргументов)
+├── runner.py            # Оркестрация: run_steps + получение сессии
+├── report.py            # Печать итоговых таблиц (сводка, статистика)
 ├── auth.py              # Вход через системный браузер, управление сессией
-├── config.py            # Константы, логирование, коды выхода
+├── config.py            # Константы, логирование, коды выхода, маркер первого прогона
 ├── steps.py             # Каталог шагов очистки (id, лейблы, порядок)
 ├── chats_api.py         # Удаление через HTTP API (основной метод, быстро)
-├── chats_browser.py     # Удаление через браузер UI (резервный фолбэк)
+├── chats_browser.py     # Удаление через браузер UI (резервный фолбэк / --force-browser)
 ├── negotiations.py      # Удаление откликов-отказов
 ├── notify.py            # Windows toast-уведомления
 ├── scheduler.py         # Регистрация в Windows Task Scheduler
-├── cli_cmds.py          # Команды без браузера (self-check, лог)
+├── cli_cmds.py          # Команды без браузера (doctor, лог)
 ├── ui_selectors.py      # CSS/data-qa селекторы веб-UI hh.ru
 ├── hhcleaner.spec       # Конфиг PyInstaller
 ├── build.bat            # Обёртка сборки .exe
+├── tools/               # Dev-утилиты (не входят в пакет)
+│   └── inspect_dom.py   # Диагностика вёрстки chatik (см. ниже)
 └── tests/               # pytest: args, dates, orchestration, predicates, scheduler, session
 ```
+
+---
+
+## Диагностика вёрстки hh.ru (`tools/inspect_dom.py`)
+
+Браузерный путь (`chats_browser.py`) цепляется за CSS/`data-qa` chatik, а hh.ru
+периодически меняет вёрстку (magritte-классы вида `intention--HASH` обфусцированы
+и плавают). Когда какой-то браузерный шаг начинает находить 0 там, где API
+находит больше, — вёрстка уехала. Чинить селекторы наугад нельзя, поэтому есть
+инспектор:
+
+```powershell
+python tools\inspect_dom.py     # нужна сохранённая сессия (hhcleaner login)
+```
+
+Он через API находит «эталонные» чаты (архивный, старый), открывает их в браузере
+и дампит: где сейчас лежит дата в карточке списка, чем помечена архивная вакансия
+и собеседование, плюс прогоняет сами production-детекторы
+(`_is_archived_in_current_page` / `_is_interview_in_current_page`) на живой
+странице. Вывод — в консоль и `tools/inspect_dom_output.txt`. По нему правятся
+`CHAT_TIME` / `ARCHIVED_VACANCY_TEXTS` / `INTERVIEW_*` в `ui_selectors.py`.
+
+Это dev-утилита: в пакет (`pyproject.toml → py-modules`) и в .exe не входит,
+запускается из исходников.
 
 ---
 
@@ -120,4 +150,4 @@ hhcleaner/
 
 **`No module named 'hh_cleaner'`** → выполните `pip install -e .` в активированном venv.
 
-**В собранном .exe не стартует браузер** → на машине нет ни Edge, ни Chrome. Установите Microsoft Edge (на Windows 10/11 он есть по умолчанию) или Google Chrome. Проверить: `dist\hhcleaner.exe --self-check`.
+**В собранном .exe не стартует браузер** → на машине нет ни Edge, ни Chrome. Установите Microsoft Edge (на Windows 10/11 он есть по умолчанию) или Google Chrome. Проверить: `dist\hhcleaner.exe doctor`.

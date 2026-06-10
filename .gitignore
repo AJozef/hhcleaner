@@ -36,3 +36,6 @@ auth_state.json
 *.egg-info/
 build/
 dist/
+
+# Вывод dev-инспектора DOM — содержит данные аккаунта (чаты, контакты)
+tools/inspect_dom_output.txt

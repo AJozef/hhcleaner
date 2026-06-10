@@ -31,41 +31,33 @@ CHAT_TITLE          = "[class*='title--']"
 CHAT_COMPANY        = "[class*='subtitle--']"
 CHAT_REJECTED_TEXT  = "Отказ"  # текст внутри красного маркера последнего сообщения
 
-# Дата последнего сообщения: сначала надёжный <time datetime>, потом запасные.
-CHAT_TIME_PRIMARY   = "time[datetime]"
-CHAT_TIME_FALLBACKS = (
-    "[data-qa*='date']", "[data-qa*='time']",
-    "[class*='date--']", "[class*='time--']",
-)
+# Дата последнего сообщения в карточке чата. Это НЕ machine-readable <time>:
+# текст вида «01.06», «вчера», «пн», «31.12.25» — разбирается в
+# chats_browser._parse_chat_date_text.
+CHAT_TIME = "[data-qa='chat-cell-creation-time'], [class*='time--']"
 
 # ─── Меню чата и выход из чата (chats_browser.py) ──────────────────────────
 CHAT_MENU  = "[data-qa='chatik-chat-menu']"
 CHAT_LEAVE = "[data-qa='chatik-chat-leave-chat']"
 
-# ─── Признаки архивной вакансии в открытом чате (chats_browser.py) ─────────
-# Прямые маркеры: достаточно найти любой из них.
-ARCHIVED_VACANCY_MARKERS = (
-    "[data-qa*='vacancy-archived']", "[data-qa*='vacancy-deleted']",
-    "[class*='vacancy-archived']",   "[class*='vacancy-deleted']",
-    "[class*='archived-vacancy']",
-)
-# Контейнеры, в тексте которых ищем фразы ARCHIVED_VACANCY_TEXTS.
-ARCHIVED_VACANCY_TEXT_HOSTS = (
-    "[data-qa*='vacancy']", "[class*='vacancy-info']",
-    "[data-qa*='chat-header']", "[class*='chat-header']",
-    "[class*='vacancy']",
-)
+# ─── Признаки в ОТКРЫТОМ чате (chats_browser.py) ──────────────────────────
+# Статус вакансии показывается «интенцией» — бейджем в шапке чата:
+#   <span class="intention--HASH">Вакансия в&nbsp;архиве</span>
+# Класс обфусцирован, поэтому цепляемся за подстроку intention-- (это именно
+# внутренний бейдж, а не intention-wrapper--) и сверяем его текст.
+VACANCY_INTENTION = "[class*='intention--']"
+# Подстроки (нижний регистр; &nbsp нормализуется в пробел в коде), означающие,
+# что вакансия больше не активна. Реальная формулировка hh — «Вакансия в архиве».
+# «удалена» (а не «удалён/удален») — чтобы матчить «Вакансия удалена», но не
+# зацепить «удалённая работа» / «удаленная работа» (формат, а не статус).
 ARCHIVED_VACANCY_TEXTS = (
-    "Вакансия закрыта", "вакансия закрыта",
-    "Вакансия удалена", "вакансия удалена",
-    "Вакансия не существует",
-    "Вакансия снята",
+    "архив", "закрыт", "удалена", "снят", "не существ", "неактивн",
 )
-# Признаки собеседования — такие чаты по архивным вакансиям НЕ трогаем.
-INTERVIEW_MARKERS = (
-    "[data-qa*='interview']", "[class*='interview']",
-    "[data-qa*='INTERVIEW']", "[class*='applicant-state_interview']",
-)
+# Собеседование показывается отдельным «пузырём»-событием в переписке:
+#   <div data-qa="chat-bubble-title">Собеседование</div>
+# Такие чаты по архивным вакансиям НЕ трогаем (равнозначно applicantState=INTERVIEW).
+INTERVIEW_BUBBLE = "[data-qa='chat-bubble-title']"
+INTERVIEW_TEXTS = ("собеседование", "интервью")
 
 # ─── Раздел откликов / negotiations (negotiations.py) ──────────────────────
 NEGOTIATIONS_LIST         = "[data-qa='negotiations-list']"
