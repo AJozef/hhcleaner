@@ -5,7 +5,6 @@ import atexit
 import os
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
-from typing import Optional
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -38,7 +37,7 @@ def package_version() -> str:
         return "dev"
 
 
-def parse_iso_datetime(value) -> Optional[datetime]:
+def parse_iso_datetime(value) -> datetime | None:
     """Парсит ISO-строку (или None) в tz-aware datetime (UTC). None при ошибке.
 
     Единственный источник логики разбора дат: импортируется из chats_api и
@@ -65,10 +64,14 @@ CHATS_ENDPOINT = f"{CHATIK_API}/chats"
 LEAVE_ENDPOINT = f"{CHATIK_API}/leave"
 MARK_READ_ENDPOINT = f"{CHATIK_API}/mark_read"
 
-# User-Agent для запросов к API (требуется, иначе часть ответов отличается).
+# User-Agent для HTTP-запросов к API. Должен совпадать с тем, что отправляет
+# реальный браузер — open_session() перезаписывает это значение фактическим UA
+# из запущенного Playwright-контекста; строка ниже используется только как запасной
+# вариант, если evaluate("navigator.userAgent") не сработает.
 USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) "
-    "Gecko/20100101 Firefox/150.0"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0"
 )
 
 # Браузеры для входа на hh.ru. Используем УЖЕ установленный в системе браузер
@@ -86,6 +89,14 @@ REQUEST_PAUSE  = 0.2  # между однотипными вызовами (уд
 PAGE_PAUSE     = 0.5  # между страницами пагинации
 RETRY_BACKOFF  = 5    # база экспоненциального backoff перед повтором запроса
 
+# Паузы для браузерного пути (chats_browser.py).
+BROWSER_INIT_PAUSE    = 1.5  # сброс скролла перед началом сбора
+BROWSER_SCROLL_PAUSE  = 0.8  # между шагами прокрутки
+BROWSER_NAV_PAUSE     = 1.2  # после page.goto в режиме ожидания рендера
+BROWSER_CLICK_PAUSE   = 0.7  # после клика по меню чата
+BROWSER_LEAVE_PAUSE   = 0.8  # после клика «Покинуть чат»
+BROWSER_VACANCY_PAUSE = 1.0  # после goto при проверке архивной вакансии
+
 # Коды выхода процесса. Живут здесь — в общем бездепендном модуле, — чтобы
 # hh_cleaner и cli_cmds не держали собственные копии (раньше cli_cmds заводил
 # локальный EXIT_OK именно ради того, чтобы не импортировать hh_cleaner и не
@@ -93,7 +104,6 @@ RETRY_BACKOFF  = 5    # база экспоненциального backoff пе
 EXIT_OK           = 0  # успех
 EXIT_LOGIN_FAILED = 2  # вход не удался
 EXIT_NEED_LOGIN   = 3  # нужен ручной вход (--login-only)
-EXIT_NO_BROWSER   = 4  # не установлен браузер Playwright (--setup)
 
 _STATE = {"quiet": False, "file_console": None}
 

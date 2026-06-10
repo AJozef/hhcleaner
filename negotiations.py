@@ -143,7 +143,7 @@ def delete_rejected_negotiations(
         total = _count_all_rejected(page)
         log(f"  [dry-run] Было бы удалено: {total}")
         log_ok(f"Итого откликов под удаление: {total}")
-        return total
+        return 0
 
     total_deleted = 0
     for round_num in range(1, _PAGE_LIMIT + 1):

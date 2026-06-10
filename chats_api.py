@@ -73,9 +73,19 @@ def open_session(context) -> requests.Session | None:
     if not xsrf:
         return None
 
+    # Берём реальный UA из браузера, чтобы cookie-fingerprint и User-Agent совпадали.
+    # Если evaluate не сработает — падаем на константу-запасной вариант из config.py.
+    ua = USER_AGENT
+    try:
+        detected = page.evaluate("navigator.userAgent")
+        if detected:
+            ua = detected
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
     session = requests.Session()
     for k, v in {
-        "User-Agent":        USER_AGENT,
+        "User-Agent":        ua,
         "Accept":            "application/json",
         "Content-Type":      "application/json",
         "X-Requested-With":  "XMLHttpRequest",
@@ -171,14 +181,15 @@ def _get_chats_page(
     )
 
 
-def _get_all_chats_pages(session: requests.Session):
+def _get_all_chats_pages(session: requests.Session, only_unread: bool = False):
     """Генератор — отдаёт страницы от первой к последней.
 
     Yield: (page_num, items, vacancies).
+    only_unread=True используется в mark_all_chats_read для фильтрации непрочитанных.
     """
     page_num = 0
     while True:
-        resp = _get_chats_page(session, page_num)
+        resp = _get_chats_page(session, page_num, only_unread=only_unread)
         if resp is None:
             log("Не удалось получить страницу, останавливаюсь.")
             break
@@ -195,7 +206,7 @@ def _get_all_chats_pages(session: requests.Session):
         items = chats.get("items", [])
         vacancies = data.get("resources", {}).get("vacancies", {})
 
-        if page_num == 0:
+        if page_num == 0 and not only_unread:
             log(f"Всего чатов: {chats.get('found', 0)}")
 
         yield page_num, items, vacancies
@@ -281,9 +292,6 @@ def _vacancy_of(item: dict, vacancies: dict) -> dict | None:
     return vacancies.get(str(vid)) if vid else None
 
 
-_parse_creation_time = parse_iso_datetime  # алиас для читаемости
-
-
 # ──────────────────────────── scan helpers ───────────────────────────────────
 
 
@@ -355,26 +363,11 @@ def mark_all_chats_read(session: requests.Session) -> int:
     log_section("Прочтение всех непрочитанных чатов")
 
     targets: list[tuple[str, str]] = []
-    page_num = 0
-    while True:
-        resp = _get_chats_page(session, page_num, only_unread=True)
-        if resp is not None and resp.status_code in (401, 403):
-            # Авторизация отвалилась — сигналим так же, как _get_all_chats_pages,
-            # чтобы вызывающий код обработал это единообразно.
-            raise ChatAPIError(
-                f"chatik API: статус {resp.status_code} — авторизация не прошла"
-            )
-        if not resp or resp.status_code != 200:
-            break
-        chats = resp.json().get("chats", {})
-        for item in chats.get("items", []):
+    for _page_num, items, _vacancies in _get_all_chats_pages(session, only_unread=True):
+        for item in items:
             mid = (item.get("lastMessage") or {}).get("id")
             if mid is not None:
                 targets.append((item["id"], mid))
-        if not chats.get("hasNextPage"):
-            break
-        page_num += 1
-        time.sleep(PAGE_PAUSE)
 
     log(f"Непрочитанных чатов: {len(targets)}")
     read = 0
@@ -444,7 +437,7 @@ def gather_stats(
                 vacancy = _vacancy_of(item, vacancies)
                 if _vacancy_is_archived(vacancy) and state != "INTERVIEW":
                     stats["archived_vacancy"] += 1
-                dt = _parse_creation_time(
+                dt = parse_iso_datetime(
                     (item.get("lastMessage") or {}).get("creationTime")
                 )
                 if dt is not None and dt < cutoff:
@@ -487,7 +480,7 @@ def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-po
         _eff = effective_cutoff  # захват локальной переменной для лямбды
 
         def _is_old(it: dict, _vac: dict) -> bool:
-            dt = _parse_creation_time((it.get("lastMessage") or {}).get("creationTime"))
+            dt = parse_iso_datetime((it.get("lastMessage") or {}).get("creationTime"))
             return dt is not None and dt < _eff
 
         predicates["old-chats"] = _is_old

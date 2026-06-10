@@ -10,10 +10,20 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
-
 from config import (
-    CHATIK_URL, OLD_CHATS_DAYS, log, log_ok, log_section, log_warn, parse_iso_datetime,
+    BROWSER_CLICK_PAUSE,
+    BROWSER_INIT_PAUSE,
+    BROWSER_LEAVE_PAUSE,
+    BROWSER_NAV_PAUSE,
+    BROWSER_SCROLL_PAUSE,
+    BROWSER_VACANCY_PAUSE,
+    CHATIK_URL,
+    OLD_CHATS_DAYS,
+    log,
+    log_ok,
+    log_section,
+    log_warn,
+    parse_iso_datetime,
 )
 from ui_selectors import (
     ARCHIVED_VACANCY_MARKERS,
@@ -68,7 +78,7 @@ def _scroll_collect_all(page) -> dict[str, dict]:
         "(sel) => { const s = document.querySelector(sel); if (s) s.scrollTop = 0; }",
         CHAT_LIST_CONTAINER,
     )
-    time.sleep(1.5)
+    time.sleep(BROWSER_INIT_PAUSE)
 
     collected: dict[str, dict] = {}
     last_scroll = -1
@@ -116,12 +126,12 @@ def _scroll_collect_all(page) -> dict[str, dict]:
         else:
             no_growth = 0
         last_scroll = result["scrollTop"]
-        time.sleep(0.8)
+        time.sleep(BROWSER_SCROLL_PAUSE)
 
     return collected
 
 
-def _extract_date_iso(chat_el) -> Optional[str]:
+def _extract_date_iso(chat_el) -> str | None:
     """Ищет ISO-дату последнего сообщения в элементе списка чатов.
 
     Порядок попыток (от надёжного к ненадёжному):
@@ -153,13 +163,13 @@ def _leave_from_current_page(page, company: str, title: str) -> bool:
     if not menu:
         return False
     menu.click()
-    time.sleep(0.7)
+    time.sleep(BROWSER_CLICK_PAUSE)
     leave = page.query_selector(CHAT_LEAVE)
     if not leave:
         return False
     leave.click()
     log(f"    Покинут: {company} — {title}")
-    time.sleep(0.8)
+    time.sleep(BROWSER_LEAVE_PAUSE)
     return True
 
 
@@ -170,7 +180,7 @@ def _leave_chat(page, href: str, company: str, title: str) -> bool:
     except Exception as e:  # pylint: disable=broad-exception-caught
         log(f"    ! Не открылся {href}: {e}")
         return False
-    time.sleep(1.2)
+    time.sleep(BROWSER_NAV_PAUSE)
     return _leave_from_current_page(page, company, title)
 
 
@@ -258,7 +268,7 @@ def delete_old_chats_browser(
     context,
     days: int = OLD_CHATS_DAYS,
     dry_run: bool = False,
-    cutoff: Optional[datetime] = None,
+    cutoff: datetime | None = None,
     limit: int | None = None,
 ) -> int:
     """Резервный метод: удаляет чаты старше N дней (или старше cutoff) через браузер.
@@ -337,7 +347,7 @@ def delete_archived_vacancy_chats_browser(
         except Exception as e:  # pylint: disable=broad-exception-caught
             log(f"    ! Не открылся: {e}")
             continue
-        time.sleep(1.0)
+        time.sleep(BROWSER_VACANCY_PAUSE)
 
         is_interview = any(_safe_query(page, sel) for sel in INTERVIEW_MARKERS)
         if is_interview:

@@ -97,6 +97,29 @@ __version__ = package_version()
 # ──────────────────────────── arg parsing ─────────────────────────────────────
 
 
+_VALID_SCHEDULE_DAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+
+
+def _schedule_day(value: str) -> str:
+    """argparse-тип: день недели MON..SUN."""
+    v = value.strip().upper()
+    if v not in _VALID_SCHEDULE_DAYS:
+        raise argparse.ArgumentTypeError(
+            f"ожидается день недели ({', '.join(_VALID_SCHEDULE_DAYS)}), получено «{value}»"
+        )
+    return v
+
+
+def _schedule_time(value: str) -> str:
+    """argparse-тип: время в формате HH:MM."""
+    import re  # pylint: disable=import-outside-toplevel
+    if not re.fullmatch(r"\d{2}:\d{2}", value.strip()):
+        raise argparse.ArgumentTypeError(
+            f"ожидается время в формате HH:MM, получено «{value}»"
+        )
+    return value.strip()
+
+
 def _positive_int(value: str) -> int:
     """argparse-тип: целое >= 1. Понятная ошибка вместо мусора в логике ниже."""
     try:
@@ -243,11 +266,11 @@ def parse_args() -> argparse.Namespace:
         help="Удалить ранее зарегистрированную задачу из планировщика.",
     )
     grp_sched.add_argument(
-        "--schedule-day", default=SCHEDULE_DAY, metavar="DAY",
+        "--schedule-day", default=SCHEDULE_DAY, metavar="DAY", type=_schedule_day,
         help=f"День недели для --install-schedule (MON..SUN). По умолчанию {SCHEDULE_DAY}.",
     )
     grp_sched.add_argument(
-        "--schedule-time", default=SCHEDULE_TIME, metavar="HH:MM",
+        "--schedule-time", default=SCHEDULE_TIME, metavar="HH:MM", type=_schedule_time,
         help=f"Время запуска для --install-schedule. По умолчанию {SCHEDULE_TIME}.",
     )
 
@@ -333,16 +356,10 @@ def _prepare_context(p, relogin: bool, headed: bool):
     return auth.interactive_login(auth.launch_context(p, headless=False))
 
 
-def _open_and_check(context, prefix: str = "Проверка"):
-    """open_session + check_session + лог проверки. Возвращает (session, status).
-
-    Повторяется во всех режимах _run (login-only/check/status/основной), поэтому
-    вынесено сюда. prefix меняет префикс лога (напр. «После тихого перелогина»).
-    """
+def _open_and_check(context):
+    """open_session + check_session. Возвращает (session, status); лог на стороне вызывающего."""
     session = open_session(context)
-    status = check_session(session)
-    log(f"{prefix}: {status.message}")
-    return session, status
+    return session, check_session(session)
 
 
 def _require_saved_session() -> bool:
@@ -497,14 +514,17 @@ def _wizard(p) -> int:
         console.print("Проверяю сохранённый вход…")
         context = auth.launch_context(p, headless=True)
         session, status = _open_and_check(context)
+        log(f"Проверка: {status.message}")
         if not status.ok:
             context.close()
             log_warn("Сохранённый вход устарел — нужно войти заново.")
             context = _wizard_login(p)
             session, status = _open_and_check(context)
+            log(f"Проверка: {status.message}")
     else:
         context = _wizard_login(p)
         session, status = _open_and_check(context)
+        log(f"Проверка: {status.message}")
 
     if not status.ok or session is None:
         log_err("Войти не удалось. Закройте окно и попробуйте ещё раз.")
@@ -579,55 +599,54 @@ def main() -> int:
         return EXIT_LOGIN_FAILED
 
 
-def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
-    """Тело работы внутри Playwright: авторизация и выполнение шагов.
-
-    Браузер берётся системный (Edge/Chrome) внутри auth.launch_context — отдельная
-    проверка «установлен ли браузер» не нужна: если ни Edge/Chrome, ни встроенного
-    Chromium нет, launch_context поднимет LoginError с понятной подсказкой.
-    """
-    # ── Режим «только вход» ───────────────────────────────────────────────────
-    if args.login_only:
-        auth.clear_session()
-        context = auth.interactive_login(auth.launch_context(p, headless=False))
-        _session, status = _open_and_check(context)
-        if not status.ok:
-            log_err("Вход не подтвердился — попробуй --login-only ещё раз.")
-        context.close()
+def _do_login_only(p) -> int:
+    auth.clear_session()
+    context = auth.interactive_login(auth.launch_context(p, headless=False))
+    _session, status = _open_and_check(context)
+    log(f"Проверка: {status.message}")
+    context.close()
+    if status.ok:
         log_ok("Готово. Теперь запускай нужные шаги обычной командой.")
-        return EXIT_OK if status.ok else EXIT_LOGIN_FAILED
-
-    # ── Режим проверки сессии ─────────────────────────────────────────────────
-    if args.check:
-        if not _require_saved_session():
-            return EXIT_NEED_LOGIN
-        context = auth.launch_context(p, headless=not args.headed)
-        _session, status = _open_and_check(context)
-        context.close()
-        if status.ok:
-            log_ok("Сессия рабочая.")
-        else:
-            log_err("Сессия не работает — выполните вход: hhcleaner --login-only")
-        return EXIT_OK if status.ok else EXIT_NEED_LOGIN
-
-    # ── Режим статистики ──────────────────────────────────────────────────────
-    if args.status:
-        if not _require_saved_session():
-            return EXIT_NEED_LOGIN
-        context = auth.launch_context(p, headless=not args.headed)
-        session, status = _open_and_check(context)
-        if not status.ok or session is None:
-            log_err("Сессия не работает — выполните вход: hhcleaner --login-only")
-            context.close()
-            return EXIT_NEED_LOGIN
-        stats = gather_stats(session, days=args.days)
-        _print_stats(stats, args.days)
-        context.close()
         return EXIT_OK
+    log_err("Вход не подтвердился — попробуй --login-only ещё раз.")
+    return EXIT_LOGIN_FAILED
 
-    # ── Основной прогон ───────────────────────────────────────────────────────
-    # Если сессии вовсе нет и --no-input — выходим до открытия окна:
-    # _prepare_context в этом случае позвал бы interactive_login.
+
+def _do_check(p, args) -> int:
+    if not _require_saved_session():
+        return EXIT_NEED_LOGIN
+    context = auth.launch_context(p, headless=not args.headed)
+    _session, status = _open_and_check(context)
+    log(f"Проверка: {status.message}")
+    context.close()
+    if status.ok:
+        log_ok("Сессия рабочая.")
+    else:
+        log_err("Сессия не работает — выполните вход: hhcleaner --login-only")
+    return EXIT_OK if status.ok else EXIT_NEED_LOGIN
+
+
+def _do_status(p, args) -> int:
+    if not _require_saved_session():
+        return EXIT_NEED_LOGIN
+    context = auth.launch_context(p, headless=not args.headed)
+    session, status = _open_and_check(context)
+    log(f"Проверка: {status.message}")
+    if not status.ok or session is None:
+        log_err("Сессия не работает — выполните вход: hhcleaner --login-only")
+        context.close()
+        return EXIT_NEED_LOGIN
+    stats = gather_stats(session, days=args.days)
+    _print_stats(stats, args.days)
+    context.close()
+    return EXIT_OK
+
+
+def _acquire_context(p, args):
+    """Возвращает (context, session) с валидной сессией или int (код выхода).
+
+    Содержит всю логику перелогина: тихий (через .env) и интерактивный.
+    """
     if args.no_input and not args.relogin and not auth.session_exists():
         log_err("Сохранённой сессии нет, а --no-input запрещает открывать окно входа.")
         log_err("Выполните вход вручную: hhcleaner --login-only")
@@ -636,11 +655,13 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
 
     context = _prepare_context(p, args.relogin, args.headed)
     session, status = _open_and_check(context)
+    log(f"Проверка: {status.message}")
 
     if not status.ok and auth.has_login_credentials():
         log_warn("Сессия не работает — пробую тихий перелогин из HH_EMAIL/HH_PASSWORD.")
         if auth.headless_login(context):
-            session, status = _open_and_check(context, "После тихого перелогина")
+            session, status = _open_and_check(context)
+            log(f"После тихого перелогина: {status.message}")
         else:
             log_warn("Тихий перелогин не удался (возможно, капча или 2FA).")
 
@@ -657,10 +678,20 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         context.close()
         context = auth.interactive_login(auth.launch_context(p, headless=False))
         session, status = _open_and_check(context)
+        log(f"Проверка: {status.message}")
         if not status.ok:
             log_err("Вход не удался.")
             context.close()
             return EXIT_LOGIN_FAILED
+
+    return context, session
+
+
+def _do_main(p, args, cutoff: datetime | None) -> int:
+    result = _acquire_context(p, args)
+    if isinstance(result, int):
+        return result
+    context, session = result
 
     steps = args.steps or DEFAULT_STEPS
     log(f"Шаги: {', '.join(steps)}")
@@ -674,17 +705,25 @@ def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
         limit=args.max_delete,
         cutoff=cutoff,
     )
-    elapsed = time.monotonic() - start
-
-    _print_summary(results, elapsed, args.dry_run)
+    _print_summary(results, time.monotonic() - start, args.dry_run)
 
     if args.no_input and not args.dry_run:
         notify.done(results)
-
     if args.keep_open:
         input("Нажмите Enter для закрытия браузера...")
     context.close()
     return EXIT_OK
+
+
+def _run(p, args: argparse.Namespace, cutoff: datetime | None = None) -> int:
+    """Диспетчер режимов внутри Playwright-контекста."""
+    if args.login_only:
+        return _do_login_only(p)
+    if args.check:
+        return _do_check(p, args)
+    if args.status:
+        return _do_status(p, args)
+    return _do_main(p, args, cutoff)
 
 
 if __name__ == "__main__":

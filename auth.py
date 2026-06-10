@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 
 from playwright.sync_api import BrowserContext
 from playwright.sync_api import Error as PlaywrightError
@@ -52,7 +53,6 @@ def clear_session() -> None:
 
     Вызывать только когда контекст закрыт — иначе файлы профиля заняты.
     """
-    import shutil  # pylint: disable=import-outside-toplevel
     if os.path.isdir(USER_DATA_DIR):
         shutil.rmtree(USER_DATA_DIR, ignore_errors=True)
 
