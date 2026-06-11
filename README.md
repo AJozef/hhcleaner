@@ -21,7 +21,18 @@ CLI и приложение для очистки hh.ru: удаляет откл
 
 Браузер для входа берётся системный (Microsoft Edge есть на каждой Windows 10/11, подойдёт и Chrome) - отдельно ничего скачивать не нужно.
 
-### 🛠️ Вариант 2: Из исходников (для разработчиков)
+### 📦 Вариант 2: через pipx (если есть Python)
+
+Поставит `hhcleaner` как обычную команду в системный PATH, в изолированном окружении - без ручного venv:
+
+```powershell
+pipx install git+https://github.com/AJozef/hhcleaner.git
+hhcleaner login
+```
+
+Обновление - `pipx upgrade hhcleaner`. Требуется Python 3.9+. Подробнее - в [INSTALLATION.md](INSTALLATION.md).
+
+### 🛠️ Вариант 3: Из исходников (для разработчиков)
 
 ```powershell
 git clone https://github.com/AJozef/hhcleaner.git

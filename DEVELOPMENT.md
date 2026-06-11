@@ -2,6 +2,8 @@
 
 ## Окружение
 
+**Для разработки** (editable-режим + dev-инструменты):
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
@@ -11,6 +13,16 @@ pip install -e ".[dev]"
 Ставит основные зависимости (requests, playwright, rich, dotenv), dev-инструменты (pytest, pylint, pyinstaller) и сам пакет в editable-режиме (изменения кода видны сразу).
 
 Браузер для входа берётся системный (Edge/Chrome) через Playwright channel — отдельно `playwright install chromium` запускать не нужно.
+
+**Для конечного использования без .exe** — через [pipx](https://pipx.pypa.io/):
+
+```powershell
+pipx install .                  # из локальных исходников
+# или:
+pipx install git+https://github.com/AJozef/hhcleaner.git
+```
+
+pipx управляет изолированным venv сам и добавляет `hhcleaner` в PATH системно — не нужно активировать venv перед каждым запуском. Обновление: `pipx upgrade hhcleaner` (из git/PyPI) или `pipx install --force .` (из исходников).
 
 ## Тесты и линтинг
 

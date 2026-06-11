@@ -98,6 +98,41 @@ HH_PASSWORD=your_password
 
 ---
 
+---
+
+## ⚙️ Установка через pipx (альтернатива .exe)
+
+Если у вас уже есть Python и [pipx](https://pipx.pypa.io/), можно установить hhcleaner как обычную команду — без скачивания .exe и без ручного управления виртуальным окружением.
+
+**Из репозитория GitHub:**
+
+```powershell
+pipx install git+https://github.com/AJozef/hhcleaner.git
+```
+
+**Из локальной папки с исходниками:**
+
+```powershell
+pipx install .
+```
+
+После этого `hhcleaner` доступен из любой папки. Обновление:
+
+```powershell
+pipx upgrade hhcleaner          # если устанавливали из PyPI или git
+pipx install --force .          # если обновляете из локальных исходников
+```
+
+Удаление:
+
+```powershell
+pipx uninstall hhcleaner
+```
+
+> **Примечание:** pipx не нужен, если пользуетесь .exe — он для тех, кто привык работать с Python-инструментами в командной строке.
+
+---
+
 ## 📖 Ещё
 
 - [README.md](README.md) — обзор проекта и команды
