@@ -1,4 +1,4 @@
-"""Единый каталог шагов очистки: id, лейблы, набор по умолчанию.
+"""Единый каталог шагов очистки: id, лейблы, набор по умолчанию, опции прогона.
 
 Предикаты остаются в chats_api (они завязаны на
 форму ответа API).
@@ -7,6 +7,11 @@
 ключи результатов, аргументы из примеров в README): менять их нельзя.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from config import OLD_CHATS_DAYS
 
 # ── Идентификаторы шагов ──────────────────────────────────────────────────────
 READ_ALL         = "read-all"           # пометить прочитанными все непрочитанные
@@ -38,6 +43,21 @@ SCAN_LABELS = {
     CHATS_REJECTED:   "Чатов с отказами",
     ARCHIVED_VACANCY: "Чатов по архивным вакансиям",
 }
+
+@dataclass
+class CleanOptions:
+    """Параметры одного прогона очистки.
+
+    Передаётся в run_steps / delete_chats_api_combined вместо набора
+    отдельных kwargs — чтобы добавление следующего флага не размножало
+    подписи по всей цепочке вызовов.
+    """
+    days: int = OLD_CHATS_DAYS  # порог для old-chats (может быть переопределён cutoff)
+    dry_run: bool = False       # показать без удаления
+    limit: int | None = None    # страховочный лимит на число удалений за шаг
+    cutoff: datetime | None = None  # абсолютная дата среза для old-chats (--since)
+    force_browser: bool = False # пропустить API, сразу браузерный путь
+
 
 # Короткие лейблы для toast-уведомления (notify.done).
 NOTIFY_LABELS = {

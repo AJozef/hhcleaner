@@ -15,7 +15,6 @@ import auth
 from config import (
     EXIT_LOGIN_FAILED,
     EXIT_OK,
-    OLD_CHATS_DAYS,
     console,
     log,
     log_err,
@@ -25,7 +24,7 @@ from config import (
 from report import print_summary
 from runner import open_and_check, run_steps
 from scheduler import SCHEDULE_DAY, SCHEDULE_TIME, install_schedule, schedule_exists
-from steps import DEFAULT_STEPS
+from steps import CleanOptions, DEFAULT_STEPS
 
 _DISCLAIMER = (
     "Программа удаляет на hh.ru отклики-отказы и ненужные чаты (отказы, архивные\n"
@@ -120,7 +119,7 @@ def _wizard(p) -> int:
 
     console.print("\nНачинаю очистку — это может занять несколько минут…\n")
     start = time.monotonic()
-    results = run_steps(context, session, DEFAULT_STEPS, OLD_CHATS_DAYS)
+    results = run_steps(context, session, DEFAULT_STEPS, CleanOptions())
     print_summary(results, time.monotonic() - start, dry_run=False)
     context.close()
 

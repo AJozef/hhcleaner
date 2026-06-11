@@ -54,7 +54,7 @@ from scheduler import (
     install_schedule,
     uninstall_schedule,
 )
-from steps import ALL_STEPS, DEFAULT_STEPS
+from steps import ALL_STEPS, CleanOptions, DEFAULT_STEPS
 
 # Имена подкоманд. Нужны, чтобы отличить `hhcleaner negotiations` (шаг неявного
 # clean) от `hhcleaner login` (подкоманда) при подстановке команды по умолчанию.
@@ -382,14 +382,15 @@ def _cmd_clean(p, args) -> int:
     if dry_run:
         log_warn("[dry-run] Режим просмотра — ничего удалено не будет.")
 
-    start = time.monotonic()
-    results = run_steps(
-        context, session, steps, args.days,
+    opts = CleanOptions(
+        days=args.days,
         dry_run=dry_run,
         limit=args.max_delete,
         cutoff=args.since,
         force_browser=args.force_browser,
     )
+    start = time.monotonic()
+    results = run_steps(context, session, steps, opts)
     print_summary(results, time.monotonic() - start, dry_run)
 
     if preview_only:

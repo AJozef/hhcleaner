@@ -11,6 +11,7 @@ from chats_api import (
     _vacancy_of,
     delete_chats_api_combined,
 )
+from steps import CleanOptions
 from chats_browser import _norm, _text_matches
 from ui_selectors import ARCHIVED_VACANCY_TEXTS, INTERVIEW_TEXTS
 
@@ -105,7 +106,7 @@ class TestCombinedDedup:
             ),
         )
         results = delete_chats_api_combined(
-            MagicMock(), ["chats-rejected", "old-chats"], days=30,
+            MagicMock(), ["chats-rejected", "old-chats"], CleanOptions(days=30),
         )
         assert leave_calls == [["a", "b"], ["c"]]
         assert results == {"chats-rejected": 2, "old-chats": 1}
@@ -128,7 +129,7 @@ class TestCombinedDedup:
             ),
         )
         delete_chats_api_combined(
-            MagicMock(), ["chats-rejected", "old-chats"], days=30, dry_run=True,
+            MagicMock(), ["chats-rejected", "old-chats"], CleanOptions(days=30, dry_run=True),
         )
         assert leave_calls == [["a", "b"], ["b", "c"]]
 

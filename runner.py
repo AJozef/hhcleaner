@@ -6,8 +6,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 import auth
 import notify
 from chats_api import (
@@ -30,20 +28,16 @@ from config import (
     log_warn,
 )
 from negotiations import delete_rejected_negotiations
-from steps import API_STEPS
+from steps import API_STEPS, CleanOptions
 
 
 # ──────────────────────────── core steps ─────────────────────────────────────
 
 
-def _run_browser_steps(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def _run_browser_steps(
     context,
     api_steps: list[str],
-    days: int,
-    *,
-    dry_run: bool,
-    limit: int | None,
-    cutoff: datetime | None,
+    opts: CleanOptions,
 ) -> dict[str, int]:
     """Браузерный путь для chats-rejected / archived-vacancy / old-chats.
 
@@ -51,38 +45,35 @@ def _run_browser_steps(  # pylint: disable=too-many-arguments,too-many-positiona
     """
     out: dict[str, int] = {}
     if "chats-rejected" in api_steps:
-        out["chats-rejected"] = delete_rejected_chats(context, dry_run=dry_run, limit=limit)
+        out["chats-rejected"] = delete_rejected_chats(
+            context, dry_run=opts.dry_run, limit=opts.limit
+        )
     if "archived-vacancy" in api_steps:
         out["archived-vacancy"] = delete_archived_vacancy_chats_browser(
-            context, dry_run=dry_run, limit=limit
+            context, dry_run=opts.dry_run, limit=opts.limit
         )
     if "old-chats" in api_steps:
         out["old-chats"] = delete_old_chats_browser(
-            context, days=days, dry_run=dry_run, cutoff=cutoff, limit=limit
+            context, days=opts.days, dry_run=opts.dry_run, cutoff=opts.cutoff, limit=opts.limit
         )
     return out
 
 
-def run_steps(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def run_steps(
     context,
     session,
     steps: list[str],
-    days: int,
-    *,
-    dry_run: bool = False,
-    limit: int | None = None,
-    cutoff: datetime | None = None,
-    force_browser: bool = False,
+    opts: CleanOptions,
 ) -> dict[str, int]:
     """Выполняет выбранные шаги в фиксированном порядке, возвращает итоги.
 
-    cutoff — абсолютная дата среза для old-chats (--since). Если None — вычисляется из days.
-    force_browser — не ходить в chatik API, сразу использовать браузерный путь
+    opts.cutoff — абсолютная дата среза для old-chats (--since). Если None — вычисляется из days.
+    opts.force_browser — не ходить в chatik API, сразу использовать браузерный путь
     (рычаг для проверки резерва и аварийный режим, если API сломался без 401/403).
     """
     results: dict[str, int] = {}
     if "read-all" in steps:
-        if force_browser:
+        if opts.force_browser:
             # У read-all нет браузерного аналога — он ходит только через API.
             log_warn("read-all доступен только через API — в режиме --force-browser пропущен.")
             results["read-all"] = 0
@@ -98,35 +89,24 @@ def run_steps(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         neg_page = context.new_page()
         try:
             results["negotiations"] = delete_rejected_negotiations(
-                neg_page, dry_run=dry_run, limit=limit
+                neg_page, dry_run=opts.dry_run, limit=opts.limit
             )
         finally:
             neg_page.close()
 
     api_steps = [s for s in API_STEPS if s in steps]
     if api_steps:
-        if force_browser:
+        if opts.force_browser:
             log_warn("Принудительно использую браузерный метод (--force-browser).")
-            results.update(
-                _run_browser_steps(
-                    context, api_steps, days, dry_run=dry_run, limit=limit, cutoff=cutoff
-                )
-            )
+            results.update(_run_browser_steps(context, api_steps, opts))
         else:
             try:
                 results.update(
-                    delete_chats_api_combined(
-                        session, api_steps, days,
-                        dry_run=dry_run, limit=limit, cutoff=cutoff,
-                    )
+                    delete_chats_api_combined(session, api_steps, opts)
                 )
             except ChatAPIError as e:
                 log_warn(f"Chatik API недоступен ({e}) — использую браузерный резерв.")
-                results.update(
-                    _run_browser_steps(
-                        context, api_steps, days, dry_run=dry_run, limit=limit, cutoff=cutoff
-                    )
-                )
+                results.update(_run_browser_steps(context, api_steps, opts))
 
     return results
 

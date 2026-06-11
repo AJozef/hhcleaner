@@ -7,6 +7,7 @@ import pytest
 
 import runner
 from chats_api import ChatAPIError
+from steps import CleanOptions
 
 
 @pytest.fixture
@@ -41,7 +42,7 @@ class TestRunSteps:
     def test_read_all_calls_only_mark_all(self, mocked_steps):
         ctx, _ = _make_context()
         session = MagicMock()
-        results = runner.run_steps(ctx, session, ["read-all"], days=30)
+        results = runner.run_steps(ctx, session, ["read-all"], CleanOptions(days=30))
         assert results == {"read-all": 5}
         mocked_steps["mark_all_chats_read"].assert_called_once_with(session)
         mocked_steps["delete_rejected_negotiations"].assert_not_called()
@@ -53,14 +54,14 @@ class TestRunSteps:
         ctx, _ = _make_context()
         session = MagicMock()
         mocked_steps["mark_all_chats_read"].side_effect = ChatAPIError("401")
-        results = runner.run_steps(ctx, session, ["read-all"], days=30)
+        results = runner.run_steps(ctx, session, ["read-all"], CleanOptions(days=30))
         assert results == {"read-all": 0}
 
     def test_negotiations_opens_and_closes_own_page(self, mocked_steps):
         ctx, page = _make_context()
         session = MagicMock()
         results = runner.run_steps(
-            ctx, session, ["negotiations"], days=30, dry_run=True, limit=10
+            ctx, session, ["negotiations"], CleanOptions(days=30, dry_run=True, limit=10)
         )
         assert results == {"negotiations": 3}
         ctx.new_page.assert_called_once()
@@ -72,15 +73,15 @@ class TestRunSteps:
     def test_api_steps_grouped_into_single_call(self, mocked_steps):
         ctx, _ = _make_context()
         session = MagicMock()
+        opts = CleanOptions(days=45, dry_run=False, limit=None, cutoff=None)
         results = runner.run_steps(
-            ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"],
-            days=45, dry_run=False, limit=None, cutoff=None,
+            ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"], opts
         )
         assert mocked_steps["delete_chats_api_combined"].call_count == 1
-        kwargs = mocked_steps["delete_chats_api_combined"].call_args.kwargs
-        assert kwargs["dry_run"] is False
-        assert kwargs["limit"] is None
-        assert kwargs["cutoff"] is None
+        passed_opts = mocked_steps["delete_chats_api_combined"].call_args.args[2]
+        assert passed_opts.dry_run is False
+        assert passed_opts.limit is None
+        assert passed_opts.cutoff is None
         assert results["chats-rejected"] == 2
         assert results["archived-vacancy"] == 1
         assert results["old-chats"] == 4
@@ -91,7 +92,7 @@ class TestRunSteps:
         mocked_steps["delete_chats_api_combined"].side_effect = ChatAPIError("401")
         results = runner.run_steps(
             ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"],
-            days=30,
+            CleanOptions(days=30),
         )
         mocked_steps["delete_rejected_chats"].assert_called_once_with(
             ctx, dry_run=False, limit=None
@@ -110,7 +111,7 @@ class TestRunSteps:
         session = MagicMock()
         results = runner.run_steps(
             ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"],
-            days=30, force_browser=True,
+            CleanOptions(days=30, force_browser=True),
         )
         mocked_steps["delete_chats_api_combined"].assert_not_called()
         mocked_steps["delete_rejected_chats"].assert_called_once_with(
@@ -124,7 +125,7 @@ class TestRunSteps:
         # read-all ходит только через API — в --force-browser он пропускается (0).
         ctx, _ = _make_context()
         results = runner.run_steps(
-            ctx, MagicMock(), ["read-all"], days=30, force_browser=True,
+            ctx, MagicMock(), ["read-all"], CleanOptions(days=30, force_browser=True)
         )
         assert results == {"read-all": 0}
         mocked_steps["mark_all_chats_read"].assert_not_called()
@@ -134,12 +135,12 @@ class TestRunSteps:
         session = MagicMock()
         mocked_steps["delete_rejected_negotiations"].side_effect = RuntimeError("boom")
         with pytest.raises(RuntimeError):
-            runner.run_steps(ctx, session, ["negotiations"], days=30)
+            runner.run_steps(ctx, session, ["negotiations"], CleanOptions(days=30))
         page.close.assert_called_once()
 
     def test_empty_steps_returns_empty_dict(self, mocked_steps):
         ctx, _ = _make_context()
-        results = runner.run_steps(ctx, MagicMock(), [], days=30)
+        results = runner.run_steps(ctx, MagicMock(), [], CleanOptions(days=30))
         assert results == {}
         # Никакая step-функция не вызвалась.
         for name, mock in mocked_steps.items():

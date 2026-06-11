@@ -27,7 +27,7 @@ from config import (
     log_section,
     parse_iso_datetime,
 )
-from steps import API_STEPS, SCAN_LABELS
+from steps import API_STEPS, SCAN_LABELS, CleanOptions
 
 
 class ChatAPIError(Exception):
@@ -104,10 +104,11 @@ def open_session(context) -> requests.Session | None:
 
 
 def _parse_retry_after(value: str | None) -> float | None:
-    """Парсит заголовок Retry-After в секунды (или None, если не разобрался).
+    """Парсит числовой заголовок Retry-After в секунды (или None, если не разобрался).
 
-    Поддерживаем числовой формат («120», «2.5»); отрицательные клампим к 0
-    («уже можно»).
+    Поддерживает только числовой формат («120», «2.5»); отрицательные клампим к 0
+    («уже можно»). HTTP-date формат не поддерживается — вызывающий код тогда
+    получит None и перейдёт на экспоненциальный backoff.
     """
     if not value:
         return None
@@ -295,26 +296,6 @@ def _vacancy_of(item: dict, vacancies: dict) -> dict | None:
 # ──────────────────────────── scan helpers ───────────────────────────────────
 
 
-def _collect_chat_ids(
-    session: requests.Session,
-    predicate: Callable[[dict, dict], bool],
-) -> list[str]:
-    """Сканирует все страницы и собирает id чатов по предикату."""
-    ids: list[str] = []
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        disable=is_quiet(),
-        transient=True,
-    ) as progress:
-        task = progress.add_task("  Сканирую чаты… найдено 0")
-        for _page_num, items, vacancies in _get_all_chats_pages(session):
-            ids.extend(it["id"] for it in items if predicate(it, vacancies))
-            progress.update(task, description=f"  Сканирую чаты… найдено {len(ids)}")
-    return ids
-
-
 def _collect_multi_chat_ids(
     session: requests.Session,
     predicates: dict[str, Callable[[dict, dict], bool]],
@@ -448,25 +429,22 @@ def gather_stats(
     return stats
 
 
-def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def delete_chats_api_combined(
     session: requests.Session,
     steps: list[str],
-    days: int = OLD_CHATS_DAYS,
-    dry_run: bool = False,
-    limit: int | None = None,
-    cutoff: datetime | None = None,
+    opts: CleanOptions,
 ) -> dict[str, int]:
     """Удаляет чаты нескольких типов за один проход по пагинации.
 
-    cutoff — абсолютная дата среза для old-chats (из --since). Если None —
-    вычисляется из days. Приоритет: cutoff > days.
+    opts.cutoff — абсолютная дата среза для old-chats (из --since). Если None —
+    вычисляется из opts.days. Приоритет: cutoff > days.
     """
     active = [s for s in API_STEPS if s in steps]
     if not active:
         return {}
 
     log_section("Сканирование чатов (единый проход)")
-    effective_cutoff = cutoff or (datetime.now(timezone.utc) - timedelta(days=days))
+    effective_cutoff = opts.cutoff or (datetime.now(timezone.utc) - timedelta(days=opts.days))
     log(f"Порог для старых чатов: {effective_cutoff.strftime('%Y-%m-%d')}")
 
     predicates: dict[str, Callable[[dict, dict], bool]] = {}
@@ -499,11 +477,11 @@ def delete_chats_api_combined(  # pylint: disable=too-many-arguments,too-many-po
         label = SCAN_LABELS.get(step, f"Чатов старше {effective_cutoff:%Y-%m-%d}")
         log(f"{label}: {len(ids)}")
         results[step] = _leave_chats(
-            session, ids, dry_run=dry_run, limit=limit
+            session, ids, dry_run=opts.dry_run, limit=opts.limit
         )
-        if not dry_run:
+        if not opts.dry_run:
             # _leave_chats режет список по limit — помечаем покинутыми ровно те,
             # что реально попытались удалить.
-            already_left.update(ids if limit is None else ids[:limit])
+            already_left.update(ids if opts.limit is None else ids[:opts.limit])
 
     return results
