@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import deque
 
 from playwright.sync_api import sync_playwright
 
@@ -33,11 +34,10 @@ def show_log(n: int, log_path: str | None = None) -> int:
         log_err(f"Лог-файл не найден: {path}")
         return 1
     with open(path, encoding="utf-8", errors="replace") as fh:
-        lines = fh.readlines()
-    tail = lines[-n:] if len(lines) > n else lines
+        tail = list(deque(fh, maxlen=n))
     for line in tail:
         console.print(line.rstrip(), markup=False, highlight=False)
-    console.print(f"\n[dim]{path} — {len(lines)} строк всего, показано {len(tail)}[/dim]")
+    console.print(f"\n[dim]{path} — показано {len(tail)} строк[/dim]")
     return EXIT_OK
 
 
