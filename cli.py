@@ -134,13 +134,29 @@ def _iso_date(value: str) -> datetime:
     return dt
 
 
+def _step(value: str) -> str:
+    """argparse-тип: один шаг очистки из ALL_STEPS.
+
+    Используем type-валидатор, а НЕ choices=ALL_STEPS: на Python 3.9–3.12 argparse
+    для позиционного nargs='*' с choices сверяет с choices сам пустой список [] и
+    падает «invalid choice: []». Голый `hhcleaner` и плановый `--no-input` прогон
+    как раз дают пустые steps — на собранном под 3.11 .exe это было бы крахом.
+    type вызывается поэлементно (на пустом списке — никогда), поэтому безопасен.
+    """
+    if value not in ALL_STEPS:
+        raise argparse.ArgumentTypeError(
+            f"неизвестный шаг «{value}». Доступно: {', '.join(ALL_STEPS)}"
+        )
+    return value
+
+
 # ──────────────────────────── parser ─────────────────────────────────────────
 
 
 def _add_clean_arguments(parser: argparse.ArgumentParser) -> None:
     """Аргументы команды clean (она же — поведение по умолчанию)."""
     parser.add_argument(
-        "steps", nargs="*", choices=ALL_STEPS, metavar="STEP",
+        "steps", nargs="*", type=_step, metavar="STEP",
         help=(
             f"Шаги через пробел. Без аргументов — {', '.join(DEFAULT_STEPS)}. "
             f"Доступно: {', '.join(ALL_STEPS)}."

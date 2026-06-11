@@ -78,6 +78,17 @@ class TestSteps:
     def test_single_step(self):
         assert _parse(["read-all"]).steps == ["read-all"]
 
+    def test_all_steps(self):
+        assert _parse(["read-all", "negotiations"]).steps == ["read-all", "negotiations"]
+
+    def test_empty_steps_ok_on_all_python_versions(self):
+        # Регрессия: nargs='*' + choices=ALL_STEPS падал на Python 3.9–3.12
+        # («invalid choice: []») при пустых steps — а это голый `hhcleaner` и
+        # плановый `--no-input` прогон. Теперь шаги валидируются через type=_step,
+        # пустой список проходит без ошибки.
+        assert _parse([]).steps == []
+        assert _parse(["--no-input"]).steps == []
+
 
 class TestSubcommands:
     def test_login(self):
