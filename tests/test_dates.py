@@ -31,6 +31,7 @@ class TestParseIsoDatetime:
 
     def test_naive_datetime_assumed_utc(self):
         dt = parse_iso_datetime("2025-06-01T12:00:00")
+        assert dt is not None
         assert dt == datetime(2025, 6, 1, 12, 0, tzinfo=timezone.utc)
         assert dt.tzinfo is not None
 
@@ -113,9 +114,11 @@ class TestParseChatDateText:
     def test_old_date_is_before_cutoff(self):
         # Смысловая проверка: «31.12.25» должен попасть под порог 60 дней.
         cutoff = _NOW - timedelta(days=60)
-        assert _parse_chat_date_text("31.12.25", _NOW) < cutoff
+        dt = _parse_chat_date_text("31.12.25", _NOW)
+        assert dt is not None and dt < cutoff
 
     def test_recent_label_after_cutoff(self):
         # «вчера» при пороге 60 дней — не старый.
         cutoff = _NOW - timedelta(days=60)
-        assert _parse_chat_date_text("вчера", _NOW) > cutoff
+        dt = _parse_chat_date_text("вчера", _NOW)
+        assert dt is not None and dt > cutoff
