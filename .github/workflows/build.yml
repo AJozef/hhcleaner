@@ -1,14 +1,55 @@
-name: Build & Release
+name: CI
 
-# Триггер: пуш тега вида v1.2.0  (git tag v1.2.0 && git push --tags)
+# Тесты и линтер гоняются на каждый push в main и на PR.
+# Сборка/релиз .exe — только на пуш тега вида v1.2.0 (git tag v1.2.0 && git push --tags),
+# и лишь после зелёных тестов (job build зависит от job test).
 on:
   push:
+    branches: [main]
     tags:
       - 'v*'
+  pull_request:
+    branches: [main]
 
 jobs:
+  test:
+    name: Tests & lint (py${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 — нижняя граница requires-python; 3.11 — версия сборочного job ниже.
+        python-version: ['3.9', '3.11']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      # Ставит пакет + dev-инструменты (pytest, pylint). Браузер Playwright НЕ
+      # качаем: тесты работают на pure-логике без сети и реального Chromium.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest
+
+      # Линтим ровно корневые модули пакета (как py-modules в pyproject).
+      # shell: bash — чтобы glob *.py раскрывался предсказуемо на Windows-раннере.
+      - name: Lint
+        shell: bash
+        run: pylint *.py
+
   build:
     name: Build hhcleaner.exe
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     # Нужно, чтобы action-gh-release мог создать релиз и залить .exe:
     # по умолчанию токен Actions read-only, и шаг релиза падал бы с 403.

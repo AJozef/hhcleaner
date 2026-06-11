@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable, NamedTuple
+from weakref import WeakKeyDictionary
 
 import requests
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -36,6 +37,34 @@ class ChatAPIError(Exception):
 
 # ──────────────────────────── session ────────────────────────────────────────
 
+# Связь requests-сессия → её браузерный контекст. Нужна, чтобы при 401/403
+# пересмотреть куки из живого Chromium, не таская context через все сигнатуры
+# request-хелперов. WeakKey: запись уходит сама, когда сессию собирает GC.
+_SESSION_CONTEXTS: "WeakKeyDictionary[requests.Session, object]" = WeakKeyDictionary()
+
+
+def _apply_session_cookies(session: requests.Session, context) -> bool:
+    """Снимает текущие куки из браузера в заголовки сессии. False, если нет _xsrf.
+
+    hh ждёт, что заголовок X-Xsrftoken совпадает с cookie _xsrf, поэтому
+    обновляем их парой. Вызывается при создании сессии и при освежении на 401/403.
+    """
+    cookies = context.cookies()
+    xsrf = next((c["value"] for c in cookies if c["name"] == "_xsrf"), None)
+    if not xsrf:
+        return False
+    session.headers["Cookie"] = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+    session.headers["X-Xsrftoken"] = xsrf
+    return True
+
+
+def _refresh_session_cookies(session: requests.Session) -> bool:
+    """Пересматривает куки сессии из её браузерного контекста. False, если нечем."""
+    context = _SESSION_CONTEXTS.get(session)
+    if context is None:
+        return False
+    return _apply_session_cookies(session, context)
+
 
 def open_session(context) -> requests.Session | None:
     """Открывает chatik, забирает куки и создаёт requests-сессию (или None).
@@ -62,17 +91,6 @@ def open_session(context) -> requests.Session | None:
         log("Не удалось открыть chatik — сессию создать нельзя.")
         return None
 
-    # Снимок кук делается один раз и зашивается в статический заголовок Cookie.
-    # На обычном прогоне (минуты) этого хватает; но если hh за время прогона
-    # ротирует _xsrf, requests-сессия об этом не узнает и удаления начнут ловить
-    # 403. Тогда лечение — перезапуск (новый open_session снимет свежие куки).
-    cookies = context.cookies()
-    cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-    xsrf = next((c["value"] for c in cookies if c["name"] == "_xsrf"), None)
-
-    if not xsrf:
-        return None
-
     # Берём реальный UA из браузера, чтобы cookie-fingerprint и User-Agent совпадали.
     # Если evaluate не сработает — падаем на константу-запасной вариант из config.py.
     ua = USER_AGENT
@@ -84,19 +102,21 @@ def open_session(context) -> requests.Session | None:
         pass
 
     session = requests.Session()
-    for k, v in {
+    session.headers.update({
         "User-Agent":        ua,
         "Accept":            "application/json",
         "Content-Type":      "application/json",
         "X-Requested-With":  "XMLHttpRequest",
-        "X-Xsrftoken":       xsrf,
         "X-hhtmSource":      "app",
         "Origin":            "https://hh.ru",
         "Referer":           "https://hh.ru/",
-        "Cookie":            cookie_str,
-    }.items():
-        session.headers[str(k)] = str(v)
-
+    })
+    # Cookie и _xsrf — обновляемые: снимаем сейчас и можем пересняться при 401/403,
+    # если hh за долгий прогон ротирует _xsrf (см. _request_with_retry). Раньше
+    # снимок делался один раз и лечился только перезапуском.
+    _SESSION_CONTEXTS[session] = context
+    if not _apply_session_cookies(session, context):
+        return None  # нет _xsrf — вход не выполнен или истёк
     return session
 
 
@@ -127,13 +147,16 @@ def _request_with_retry(
     retries: int = 3,
     **kwargs,
 ) -> requests.Response | None:
-    """Выполняет HTTP-запрос с повтором при сетевых сбоях и 429.
+    """Выполняет HTTP-запрос с повтором при сетевых сбоях, 429 и 401/403.
 
     Возвращает Response или None при исчерпании попыток на сетевом сбое.
     На 429 пытается уважить заголовок Retry-After (секунды или HTTP-date);
     если заголовок отсутствует — экспоненциальный backoff RETRY_BACKOFF×2^attempt.
     После исчерпания retry на 429 возвращает последний Response (с status 429),
     чтобы вызывающий код мог его обработать.
+    На 401/403 один раз пересматривает куки из браузера (hh мог ротировать _xsrf
+    за долгий прогон) и повторяет; если освежить нечем — отдаёт ответ как есть,
+    и вызывающий уходит в браузерный фолбэк.
     Прочие 4xx/5xx не ретраятся — отдаются вызывающему как есть.
     """
     kwargs.setdefault("timeout", 30)
@@ -156,6 +179,12 @@ def _request_with_retry(
                 pause = RETRY_BACKOFF * (2 ** attempt)
             log(f"  ! 429 {what} — пауза {pause:.1f}с и повтор")
             time.sleep(pause)
+            continue
+
+        if (resp.status_code in (401, 403) and attempt < retries - 1
+                and _refresh_session_cookies(session)):
+            log(f"  ! {resp.status_code} {what} — освежил куки из браузера, повтор")
+            time.sleep(REQUEST_PAUSE)
             continue
 
         return resp
@@ -433,11 +462,14 @@ def delete_chats_api_combined(
     session: requests.Session,
     steps: list[str],
     opts: CleanOptions,
+    limit: int | None = None,
 ) -> dict[str, int]:
     """Удаляет чаты нескольких типов за один проход по пагинации.
 
     opts.cutoff — абсолютная дата среза для old-chats (из --since). Если None —
     вычисляется из opts.days. Приоритет: cutoff > days.
+    limit — остаток глобального бюджета --max-delete: общий потолок на все шаги
+    группы, убывает по мере удаления (а не по N на каждый шаг). None — без лимита.
     """
     active = [s for s in API_STEPS if s in steps]
     if not active:
@@ -467,21 +499,24 @@ def delete_chats_api_combined(
 
     results: dict[str, int] = {}
     already_left: set[str] = set()
+    budget = limit  # остаток глобального бюджета на всю группу шагов
     for step in active:
         # Один чат может попасть под несколько предикатов сразу (отказ + архивная
         # вакансия + старый). Отбрасываем id, уже покинутые на предыдущем шаге:
         # иначе второй leave вернул бы ошибку «чат уже покинут», и удаление
         # приписалось бы не тому шагу, а запрос ушёл бы впустую.
         ids = [cid for cid in collected.get(step, []) if cid not in already_left]
+        # Глобальный потолок: режем список по остатку бюджета здесь, чтобы
+        # already_left и убывание budget считались по одному и тому же срезу.
+        if budget is not None:
+            ids = ids[:budget]
         # old-chats: лейбл из фактического порога (cutoff/--days).
         label = SCAN_LABELS.get(step, f"Чатов старше {effective_cutoff:%Y-%m-%d}")
         log(f"{label}: {len(ids)}")
-        results[step] = _leave_chats(
-            session, ids, dry_run=opts.dry_run, limit=opts.limit
-        )
+        results[step] = _leave_chats(session, ids, dry_run=opts.dry_run)
         if not opts.dry_run:
-            # _leave_chats режет список по limit — помечаем покинутыми ровно те,
-            # что реально попытались удалить.
-            already_left.update(ids if opts.limit is None else ids[:opts.limit])
+            already_left.update(ids)
+            if budget is not None:
+                budget = max(0, budget - results[step])
 
     return results

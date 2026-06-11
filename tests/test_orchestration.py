@@ -130,6 +130,35 @@ class TestRunSteps:
         assert results == {"read-all": 0}
         mocked_steps["mark_all_chats_read"].assert_not_called()
 
+    def test_max_delete_budget_shared_across_steps(self, mocked_steps):
+        # --max-delete — глобальный потолок: negotiations удаляет 3, в combined
+        # уходит остаток 7, а не полные 10 заново.
+        ctx, _ = _make_context()
+        session = MagicMock()
+        runner.run_steps(
+            ctx, session, ["negotiations", "chats-rejected", "old-chats"],
+            CleanOptions(days=30, limit=10),
+        )
+        neg_limit = mocked_steps["delete_rejected_negotiations"].call_args.kwargs["limit"]
+        assert neg_limit == 10
+        combined_remaining = mocked_steps["delete_chats_api_combined"].call_args.args[3]
+        assert combined_remaining == 7  # 10 - 3
+
+    def test_max_delete_budget_shared_in_browser_fallback(self, mocked_steps):
+        # Тот же глобальный потолок и на браузерном резерве: rejected удалил 7,
+        # archived получает остаток 3.
+        ctx, _ = _make_context()
+        session = MagicMock()
+        mocked_steps["delete_chats_api_combined"].side_effect = ChatAPIError("401")
+        runner.run_steps(
+            ctx, session, ["chats-rejected", "archived-vacancy", "old-chats"],
+            CleanOptions(days=30, limit=10),
+        )
+        rej_limit = mocked_steps["delete_rejected_chats"].call_args.kwargs["limit"]
+        arch_limit = mocked_steps["delete_archived_vacancy_chats_browser"].call_args.kwargs["limit"]
+        assert rej_limit == 10
+        assert arch_limit == 3  # 10 - 7
+
     def test_negotiations_page_closed_on_exception(self, mocked_steps):
         ctx, page = _make_context()
         session = MagicMock()

@@ -5,8 +5,8 @@
 диске. Все последующие запуски открывают тот же профиль — без повторного входа и
 без хранения пароля. Полный профиль разлогинивается реже, чем снимок storage_state.
 
-Если в .env заданы HH_EMAIL и HH_PASSWORD — форма заполняется автоматически;
-капчу и 2FA всё равно нужно пройти вручную.
+Вход всегда ручной: данные, капчу и код из почты/SMS вводит человек в окне
+браузера. Пароль нигде не хранится и не вводится автоматически.
 
 ВНИМАНИЕ: папка профиля фактически даёт доступ к аккаунту — не делитесь ей.
 """
@@ -21,17 +21,11 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from config import (
     BROWSER_CHANNELS, LOGIN_URL, USER_DATA_DIR, ensure_app_dir,
-    log, log_ok, log_section, log_warn,
+    log, log_ok, log_section,
 )
-from ui_selectors import (
-    LOGIN_APPLICANT_CARD,
-    LOGIN_PASSWORD_INPUT,
-    LOGIN_SUBMIT_BUTTON,
-    LOGIN_USERNAME_INPUT,
-)
+from ui_selectors import LOGIN_APPLICANT_CARD
 
 _LOGIN_TIMEOUT_MS = 5 * 60 * 1000  # 5 минут на ручной вход
-_HEADLESS_LOGIN_TIMEOUT_MS = 15 * 1000  # 15 секунд на тихий перелогин
 
 
 class LoginError(Exception):
@@ -123,93 +117,6 @@ def detect_browser(playwright) -> str | None:
     return None
 
 
-def _autofill_login(page, email: str, password: str) -> None:
-    """Пытается автоматически заполнить форму логина из переменных окружения.
-
-    Работает по принципу best-effort: если селекторы не совпали — тихо
-    пропускает.
-    """
-    if not email:
-        return
-
-    try:
-        inp = page.wait_for_selector(
-            LOGIN_USERNAME_INPUT,
-            timeout=5000,
-            state="visible",
-        )
-        if inp:
-            inp.fill(email)
-            btn = page.query_selector(LOGIN_SUBMIT_BUTTON)
-            if btn:
-                btn.click()
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
-
-    if not password:
-        return
-
-    try:
-        inp = page.wait_for_selector(
-            LOGIN_PASSWORD_INPUT,
-            timeout=5000,
-            state="visible",
-        )
-        if inp:
-            inp.fill(password)
-            btn = page.query_selector(LOGIN_SUBMIT_BUTTON)
-            if btn:
-                btn.click()
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
-
-
-def has_login_credentials() -> bool:
-    """True, если HH_EMAIL и HH_PASSWORD заданы в env (оба непустые после strip)."""
-    return bool(
-        os.environ.get("HH_EMAIL", "").strip()
-        and os.environ.get("HH_PASSWORD", "").strip()
-    )
-
-
-def headless_login(context: BrowserContext) -> bool:
-    """Тихий вход через HH_EMAIL/HH_PASSWORD — без участия человека.
-
-    Используется в --no-input при протухшей сессии: пытаемся автоматически
-    залогиниться через автозаполнение формы. Бюджет времени складывается из
-    ожидания полей (до ~10 c) и редиректа после входа (_HEADLESS_LOGIN_TIMEOUT_MS,
-    15 c) — то есть до ~25 c в худшем случае. Капча и 2FA автоматически не
-    проходятся — тогда возвращаем False, и вызывающий код решает что делать
-    (notify + exit 3).
-    """
-    if not has_login_credentials():
-        return False
-
-    email    = os.environ.get("HH_EMAIL", "").strip()
-    password = os.environ.get("HH_PASSWORD", "").strip()
-
-    page = context.pages[0] if context.pages else context.new_page()
-    try:
-        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=15000)
-    except (PlaywrightError, PlaywrightTimeout):
-        return False
-
-    try:
-        card = page.query_selector(LOGIN_APPLICANT_CARD)
-        if card:
-            card.click()
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass  # карточку выбора роли могут не показать — не критично
-
-    _autofill_login(page, email, password)
-
-    try:
-        page.wait_for_url(_login_succeeded, timeout=_HEADLESS_LOGIN_TIMEOUT_MS)
-        return True
-    except (PlaywrightError, PlaywrightTimeout):
-        return False
-
-
 def interactive_login(context: BrowserContext) -> BrowserContext:
     """Ручной вход в уже открытом (видимом) контексте.
 
@@ -227,18 +134,8 @@ def interactive_login(context: BrowserContext) -> BrowserContext:
         pass
 
     log_section("Вход в hh.ru")
-
-    email    = os.environ.get("HH_EMAIL", "").strip()
-    password = os.environ.get("HH_PASSWORD", "").strip()
-
-    if email and password:
-        log_ok("Данные из .env найдены — заполняю форму автоматически.")
-        log_warn("Если появится капча или 2FA — пройдите их вручную в окне браузера.")
-        _autofill_login(page, email, password)
-    else:
-        log("Роль «Я ищу работу» уже выбрана.")
-        log("Введите данные и пройдите капчу/код из почты — скрипт продолжит сам.")
-        log_warn("Подсказка: задайте HH_EMAIL и HH_PASSWORD в .env для автозаполнения.")
+    log("Роль «Я ищу работу» уже выбрана.")
+    log("Введите данные и пройдите капчу/код из почты — скрипт продолжит сам.")
 
     try:
         page.wait_for_url(_login_succeeded, timeout=_LOGIN_TIMEOUT_MS)

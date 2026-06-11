@@ -6,14 +6,12 @@ import os
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 
-from dotenv import load_dotenv
 from rich.console import Console
-
-load_dotenv()  # загружает .env рядом со скриптом; без файла — тихо игнорирует
 
 # Каталог данных приложения: профиль браузера и лог. Лежит в домашней папке,
 # чтобы установка через pip (в site-packages) не пыталась писать рядом с кодом.
-# Переопределяется HHCLEANER_HOME — удобно для переносных установок и тестов.
+# Переопределяется переменной окружения HHCLEANER_HOME — удобно для переносных
+# установок и тестов.
 APP_DIR = os.environ.get("HHCLEANER_HOME") or os.path.join(os.path.expanduser("~"), ".hhcleaner")
 DEFAULT_LOG_FILE = os.path.join(APP_DIR, "hhcleaner.log")
 USER_DATA_DIR = os.path.join(APP_DIR, "userdata")

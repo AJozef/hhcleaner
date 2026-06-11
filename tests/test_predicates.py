@@ -111,6 +111,52 @@ class TestCombinedDedup:
         assert leave_calls == [["a", "b"], ["c"]]
         assert results == {"chats-rejected": 2, "old-chats": 1}
 
+    def test_global_limit_carries_remainder_across_steps(self, monkeypatch):
+        # --max-delete — глобальный потолок: первый шаг съедает часть бюджета,
+        # второму достаётся остаток, а не полный N заново.
+        monkeypatch.setattr(
+            chats_api, "_collect_multi_chat_ids",
+            lambda session, predicates: {
+                "chats-rejected": ["a", "b"],
+                "old-chats": ["c", "d", "e"],
+            },
+        )
+        leave_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            chats_api, "_leave_chats",
+            lambda session, ids, dry_run=False, limit=None: (
+                leave_calls.append(list(ids)) or len(ids)
+            ),
+        )
+        results = delete_chats_api_combined(
+            MagicMock(), ["chats-rejected", "old-chats"], CleanOptions(days=30), limit=3,
+        )
+        # Первый шаг удалил 2 из 3 → второму осталось 1 (а не 3).
+        assert leave_calls == [["a", "b"], ["c"]]
+        assert results == {"chats-rejected": 2, "old-chats": 1}
+
+    def test_global_limit_exhausted_skips_later_step(self, monkeypatch):
+        # Бюджет исчерпан первым шагом → второй ничего не удаляет.
+        monkeypatch.setattr(
+            chats_api, "_collect_multi_chat_ids",
+            lambda session, predicates: {
+                "chats-rejected": ["a", "b", "c", "d"],
+                "old-chats": ["e", "f"],
+            },
+        )
+        leave_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            chats_api, "_leave_chats",
+            lambda session, ids, dry_run=False, limit=None: (
+                leave_calls.append(list(ids)) or len(ids)
+            ),
+        )
+        results = delete_chats_api_combined(
+            MagicMock(), ["chats-rejected", "old-chats"], CleanOptions(days=30), limit=3,
+        )
+        assert leave_calls == [["a", "b", "c"], []]
+        assert results == {"chats-rejected": 3, "old-chats": 0}
+
     def test_dry_run_does_not_dedup(self, monkeypatch):
         # В dry-run ничего не удаляется, поэтому исключать 'b' из второго шага
         # нельзя — иначе предпросмотр занизил бы число старых чатов.

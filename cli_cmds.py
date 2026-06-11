@@ -78,23 +78,13 @@ def self_check() -> int:
 
     ok_all = True
 
-    def _chk(label: str, ok: bool, detail: str = "", optional: bool = False) -> None:
-        """optional=True: незаданный пункт показывается нейтрально и НЕ заваливает итог.
-
-        Нужно для HH_EMAIL/HH_PASSWORD — это удобство (автозаполнение формы), а не
-        требование. Без флага красный «x» у опционального пункта вводил в заблуждение
-        («Есть проблемы», хотя всё рабочее).
-        """
+    def _chk(label: str, ok: bool, detail: str = "") -> None:
+        """Печатает строку диагностики; любая неудача заваливает общий итог (ok_all)."""
         nonlocal ok_all
-        if ok:
-            mark = "[green]v[/green]"
-        elif optional:
-            mark = "[dim]-[/dim]"
-        else:
-            mark = "[red]x[/red]"
+        mark = "[green]v[/green]" if ok else "[red]x[/red]"
         suffix = f"  [dim]{detail}[/dim]" if detail else ""
         console.print(f"  {mark}  {label}{suffix}")
-        if not ok and not optional:
+        if not ok:
             ok_all = False
 
     # Python
@@ -142,14 +132,6 @@ def self_check() -> int:
         _chk("Лог-файл", True, f"{DEFAULT_LOG_FILE} ({size_kb} КБ)")
     else:
         _chk("Лог-файл", True, f"ещё не создан -> {DEFAULT_LOG_FILE}")
-
-    # Credentials
-    has_email = bool(os.environ.get("HH_EMAIL", "").strip())
-    has_pwd   = bool(os.environ.get("HH_PASSWORD", "").strip())
-    _chk("HH_EMAIL в .env", has_email, "(опционально) задайте для автозаполнения формы",
-         optional=True)
-    _chk("HH_PASSWORD в .env", has_pwd, "(опционально) задайте для автозаполнения формы",
-         optional=True)
 
     if ok_all:
         log_ok("Всё в порядке — можно работать.")

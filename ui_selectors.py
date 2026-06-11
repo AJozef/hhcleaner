@@ -17,9 +17,8 @@ hh.ru периодически меняет вёрстку, и тогда как
 from __future__ import annotations
 
 # ─── Форма входа (auth.py) ─────────────────────────────────────────────────
-LOGIN_USERNAME_INPUT = "[data-qa='login-input-username'], input[name='login'], input[type='email']"
-LOGIN_PASSWORD_INPUT = "[data-qa='login-input-password'], input[type='password']"
-LOGIN_SUBMIT_BUTTON  = "[data-qa='account-login-submit'], button[type='submit']"
+# Вход всегда ручной — селекторы полей формы не нужны; цепляемся только за
+# карточку выбора роли «соискатель», чтобы её предвыбрать.
 LOGIN_APPLICANT_CARD = "[data-qa*='account-type-card-APPLICANT']"
 
 # ─── Список чатов chatik (chats_browser.py) ────────────────────────────────

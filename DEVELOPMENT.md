@@ -10,7 +10,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Ставит основные зависимости (requests, playwright, rich, dotenv), dev-инструменты (pytest, pylint, pyinstaller) и сам пакет в editable-режиме (изменения кода видны сразу).
+Ставит основные зависимости (requests, playwright, rich), dev-инструменты (pytest, pylint, pyinstaller) и сам пакет в editable-режиме (изменения кода видны сразу).
 
 Браузер для входа берётся системный (Edge/Chrome) через Playwright channel — отдельно `playwright install chromium` запускать не нужно.
 

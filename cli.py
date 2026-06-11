@@ -163,7 +163,7 @@ def _add_clean_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--max-delete", type=_positive_int, default=None, metavar="N",
-        help="Страховочный лимит: удалить не более N элементов за шаг.",
+        help="Страховочный лимит: удалить не более N элементов суммарно за прогон.",
     )
     parser.add_argument(
         "--force-browser", action="store_true",

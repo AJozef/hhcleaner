@@ -1,11 +1,10 @@
-"""Тесты check_session, has_login_credentials, retry — без сети."""
+"""Тесты check_session, retry и освежения кук сессии — без сети."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 import requests
 
-import auth
 import chats_api
 from chats_api import (
     SessionStatus,
@@ -21,33 +20,6 @@ def test_none_session_is_not_ok():
     assert status.ok is False
     assert status.chats is None
     assert status.message  # непустое человекочитаемое описание
-
-
-class TestHasLoginCredentials:
-    def test_false_when_both_missing(self, monkeypatch):
-        monkeypatch.delenv("HH_EMAIL", raising=False)
-        monkeypatch.delenv("HH_PASSWORD", raising=False)
-        assert auth.has_login_credentials() is False
-
-    def test_false_when_only_email(self, monkeypatch):
-        monkeypatch.setenv("HH_EMAIL", "x@y.z")
-        monkeypatch.delenv("HH_PASSWORD", raising=False)
-        assert auth.has_login_credentials() is False
-
-    def test_false_when_only_password(self, monkeypatch):
-        monkeypatch.delenv("HH_EMAIL", raising=False)
-        monkeypatch.setenv("HH_PASSWORD", "pw")
-        assert auth.has_login_credentials() is False
-
-    def test_true_when_both_set(self, monkeypatch):
-        monkeypatch.setenv("HH_EMAIL", "x@y.z")
-        monkeypatch.setenv("HH_PASSWORD", "pw")
-        assert auth.has_login_credentials() is True
-
-    def test_false_when_only_whitespace(self, monkeypatch):
-        monkeypatch.setenv("HH_EMAIL", "   ")
-        monkeypatch.setenv("HH_PASSWORD", "   ")
-        assert auth.has_login_credentials() is False
 
 
 class TestParseRetryAfter:
@@ -147,14 +119,87 @@ class TestRequestWithRetryOn429:
         assert session.request.call_count == 3
 
     def test_4xx_other_than_429_not_retried(self, monkeypatch):
+        # 404 — не 429 и не 401/403, поэтому не ретраится (401/403 — отдельный кейс ниже).
         session = MagicMock()
-        session.request.return_value = self._make_response(403)
+        session.request.return_value = self._make_response(404)
         slept: list[float] = []
         monkeypatch.setattr(chats_api.time, "sleep", lambda s: slept.append(s))
 
         result = _request_with_retry(session, "GET", "https://x/", what="t")
 
         assert result is not None
-        assert result.status_code == 403
+        assert result.status_code == 404
         assert session.request.call_count == 1
         assert slept == []
+
+
+class TestRequestWithRetryOnAuth:
+    """401/403: освежение кук из браузера и повтор (ротация _xsrf на длинном прогоне)."""
+
+    @staticmethod
+    def _resp(status: int) -> MagicMock:
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = status
+        resp.headers = {}
+        return resp
+
+    def test_403_refreshes_cookies_and_retries(self, monkeypatch):
+        session = MagicMock()
+        session.request.side_effect = [self._resp(403), self._resp(200)]
+        monkeypatch.setattr(chats_api.time, "sleep", lambda s: None)
+        monkeypatch.setattr(chats_api, "_refresh_session_cookies", lambda s: True)
+
+        result = _request_with_retry(session, "GET", "https://x/", what="t")
+
+        assert result is not None and result.status_code == 200
+        assert session.request.call_count == 2
+
+    def test_401_also_triggers_refresh(self, monkeypatch):
+        session = MagicMock()
+        session.request.side_effect = [self._resp(401), self._resp(200)]
+        monkeypatch.setattr(chats_api.time, "sleep", lambda s: None)
+        monkeypatch.setattr(chats_api, "_refresh_session_cookies", lambda s: True)
+
+        result = _request_with_retry(session, "GET", "https://x/", what="t")
+
+        assert result is not None and result.status_code == 200
+        assert session.request.call_count == 2
+
+    def test_403_not_retried_when_refresh_fails(self, monkeypatch):
+        # Освежать нечем (нет контекста / нет _xsrf) → отдаём 403 как есть, 1 запрос.
+        session = MagicMock()
+        session.request.return_value = self._resp(403)
+        monkeypatch.setattr(chats_api.time, "sleep", lambda s: None)
+        monkeypatch.setattr(chats_api, "_refresh_session_cookies", lambda s: False)
+
+        result = _request_with_retry(session, "GET", "https://x/", what="t")
+
+        assert result is not None and result.status_code == 403
+        assert session.request.call_count == 1
+
+
+class TestApplySessionCookies:
+    """Снятие/освежение кук из браузерного контекста в заголовки сессии."""
+
+    def test_sets_cookie_and_xsrf_when_present(self):
+        session = requests.Session()
+        context = MagicMock()
+        context.cookies.return_value = [
+            {"name": "_xsrf", "value": "tok"},
+            {"name": "hhuid", "value": "abc"},
+        ]
+        assert chats_api._apply_session_cookies(session, context) is True
+        assert session.headers["X-Xsrftoken"] == "tok"
+        assert "_xsrf=tok" in session.headers["Cookie"]
+        assert "hhuid=abc" in session.headers["Cookie"]
+
+    def test_false_when_no_xsrf(self):
+        session = requests.Session()
+        context = MagicMock()
+        context.cookies.return_value = [{"name": "hhuid", "value": "abc"}]
+        assert chats_api._apply_session_cookies(session, context) is False
+
+    def test_refresh_without_registered_context_is_false(self):
+        # Сессия не из open_session → в реестре контекста нет → освежать нечем.
+        session = requests.Session()
+        assert chats_api._refresh_session_cookies(session) is False
