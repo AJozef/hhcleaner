@@ -75,10 +75,11 @@ def parse_iso_datetime(value) -> datetime | None:
 HH_URL = "https://hh.ru"
 LOGIN_URL = "https://hh.ru/account/login"  # прямая форма входа (роль «соискатель» по умолчанию)
 NEGOTIATIONS_URL = "https://hh.ru/applicant/negotiations"
-CHATIK_URL = "https://chatik.hh.ru/?platform=xhh"
+CHATIK_BASE = "https://chatik.hh.ru"
+CHATIK_URL = f"{CHATIK_BASE}/?platform=xhh"
 
 # Эндпойнты API чатов (chatik). Собираются от базы — не повторяем хост в коде.
-CHATIK_API = "https://chatik.hh.ru/chatik/api"
+CHATIK_API = f"{CHATIK_BASE}/chatik/api"
 CHATS_ENDPOINT = f"{CHATIK_API}/chats"
 LEAVE_ENDPOINT = f"{CHATIK_API}/leave"
 MARK_READ_ENDPOINT = f"{CHATIK_API}/mark_read"

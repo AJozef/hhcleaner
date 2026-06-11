@@ -18,6 +18,7 @@ from config import (
     BROWSER_NAV_PAUSE,
     BROWSER_SCROLL_PAUSE,
     BROWSER_VACANCY_PAUSE,
+    CHATIK_BASE,
     CHATIK_URL,
     OLD_CHATS_DAYS,
     log,
@@ -42,8 +43,6 @@ from ui_selectors import (
     VACANCY_INTENTION,
 )
 
-_CHATIK_BASE = "https://chatik.hh.ru"
-
 # Максимум проходов для delete_rejected_chats.
 _MAX_ROUNDS = 6
 # Ограничение скролла: защита на случай очень большого аккаунта.
@@ -65,7 +64,7 @@ def _open_chatik(page) -> bool:
 
 
 def _full_url(href: str) -> str:
-    return f"{_CHATIK_BASE}{href}" if href.startswith("/") else href
+    return f"{CHATIK_BASE}{href}" if href.startswith("/") else href
 
 
 def _scroll_collect_all(page) -> dict[str, dict]:
