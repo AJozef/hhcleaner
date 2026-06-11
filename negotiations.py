@@ -190,11 +190,21 @@ def delete_rejected_negotiations(
 
         total_deleted += checked
         log(f"  Удалено: {checked}")
-        page.wait_for_timeout(800)
+        # Ждём, пока список откликов обновится после удаления. wait_for_selector
+        # надёжнее фиксированного таймаута: продолжаем сразу, когда DOM готов.
+        try:
+            page.wait_for_selector(NEGOTIATIONS_LIST, timeout=5000, state="visible")
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
         if limit is not None and total_deleted >= limit:
             log_warn(f"Достигнут лимит --max-delete ({limit}) — останавливаюсь.")
             break
 
+    else:
+        log_warn(
+            f"Остановлено после {_PAGE_LIMIT} проходов — возможно, остались непрочитанные отказы. "
+            "Запустите hhcleaner ещё раз."
+        )
     log_ok(f"Итого откликов удалено: {total_deleted}")
     return total_deleted
